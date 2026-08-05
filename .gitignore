@@ -1,0 +1,14 @@
+.DS_Store
+build/
+DerivedData/
+Cartridge.xcodeproj/
+*.xcuserstate
+xcuserdata/
+
+# ROMs are copyrighted and must never be committed.
+*.gb
+*.gbc
+*.gba
+
+# Fetched test suites are large and reproducible from scripts/fetch-tests.sh
+GameBoyKitTests/Resources/sm83/

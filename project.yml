@@ -1,0 +1,82 @@
+name: Cartridge
+
+options:
+  bundleIdPrefix: me.jacobsilva
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "18.0"
+    macOS: "15.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: H8K99MLMCA
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  Cartridge:
+    # One source tree, two platforms. Neither kit imports a UI framework, so
+    # only the shell differs between iOS and macOS.
+    type: application
+    platform: [iOS, macOS]
+    sources:
+      - path: EmulatorKit
+      - path: GameBoyKit
+      - path: Cartridge
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.jacobsilva.Cartridge
+        PRODUCT_NAME: Cartridge
+        GENERATE_INFOPLIST_FILE: true
+        INFOPLIST_KEY_CFBundleDisplayName: Cartridge
+        ENABLE_PREVIEWS: true
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+      configs:
+        Debug:
+          # The core is a tight interpreter loop. An unoptimised debug build
+          # runs roughly an order of magnitude too slowly to play.
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+    settings_iOS:
+      base:
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        TARGETED_DEVICE_FAMILY: "1,2"
+    settings_macOS:
+      base:
+        ENABLE_HARDENED_RUNTIME: true
+
+  GameBoyKitTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: EmulatorKit
+      - path: GameBoyKit
+      - path: GameBoyKitTests
+        excludes: ["Resources"]
+      # Copied as a folder reference so the runner can enumerate it.
+      - path: GameBoyKitTests/Resources/sm83
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.jacobsilva.GameBoyKitTests
+        GENERATE_INFOPLIST_FILE: true
+
+schemes:
+  Cartridge_macOS:
+    build:
+      targets: { Cartridge_macOS: all }
+    run: { config: Debug }
+    test:
+      config: Debug
+      targets: [GameBoyKitTests]
+  Cartridge_iOS:
+    build:
+      targets: { Cartridge_iOS: all }
+    run: { config: Debug }
+    test:
+      config: Debug
+      targets: [GameBoyKitTests]
