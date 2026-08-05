@@ -116,21 +116,27 @@ extension CPU {
     /// entire reason that flag exists: the correction has to be applied in the
     /// opposite direction after a subtraction.
     func decimalAdjust() {
-        var a = registers.a
+        let subtracting = registers.has(.subtract)
+        var correction: UInt8 = 0
         var carry = registers.has(.carry)
 
-        if registers.has(.subtract) {
-            if registers.has(.halfCarry) { a = a &- 0x06 }
-            if carry { a = a &- 0x60 }
-        } else {
-            if registers.has(.halfCarry) || (a & 0x0F) > 0x09 { a = a &+ 0x06 }
-            if carry || a > 0x9F {
-                a = a &+ 0x60
-                carry = true
-            }
+        // Both halves of the correction are decided from the value *before* any
+        // of it is applied. Applying the low correction first and then testing
+        // the adjusted value is a common shortcut and it is wrong: 0xFA needs
+        // both corrections, but adding six first wraps it to 0x00, which no
+        // longer looks like it needs the second.
+        if registers.has(.halfCarry) || (!subtracting && registers.a & 0x0F > 0x09) {
+            correction |= 0x06
+        }
+        if carry || (!subtracting && registers.a > 0x99) {
+            correction |= 0x60
+            // Carry means "the result needed more than two digits", and once
+            // set it stays set — a subtraction never clears it.
+            carry = true
         }
 
-        registers.a = a
+        registers.a = subtracting ? registers.a &- correction : registers.a &+ correction
+        let a = registers.a
         registers.set(.zero, a == 0)
         registers.set(.halfCarry, false)
         registers.set(.carry, carry)

@@ -25,7 +25,7 @@ public struct ScreenSize: Equatable, Sendable {
 /// on-screen controls once, and a core simply ignores buttons its hardware
 /// never had. The Game Boy has no shoulder buttons; it doesn't need to know
 /// they exist elsewhere.
-public enum Button: String, CaseIterable, Sendable {
+public enum ConsoleButton: String, CaseIterable, Sendable {
     case up, down, left, right
     case a, b, select, start
     /// Game Boy Advance only.
@@ -86,7 +86,7 @@ public protocol EmulatedSystem: AnyObject {
     /// Advances emulation by exactly one video frame.
     func runFrame()
 
-    func set(_ button: Button, pressed: Bool)
+    func set(_ button: ConsoleButton, pressed: Bool)
 
     /// The completed frame, one packed 0xAARRGGBB pixel per element, row-major.
     var framebuffer: [UInt32] { get }

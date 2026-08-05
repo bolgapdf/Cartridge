@@ -25,7 +25,7 @@ public struct Flags: OptionSet, Sendable {
 /// The eight-bit registers pair up into sixteen-bit ones, which the instruction
 /// set uses constantly, so the pairs are computed rather than stored — there's
 /// no separate state to keep in sync.
-public struct Registers: Equatable, Sendable {
+public struct Registers: Equatable, Sendable, Codable {
     public var a: UInt8 = 0
     public var b: UInt8 = 0
     public var c: UInt8 = 0

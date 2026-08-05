@@ -1,25 +1,29 @@
 #!/usr/bin/env bash
 #
-# Downloads the SingleStepTests SM83 suite and samples it down to a size worth
-# committing.
+# Downloads the SingleStepTests SM83 suite: 1,000 cases for each of 500
+# opcodes, around 145 MB. Nothing is committed — the suite is reproducible from
+# this script, and the repository stays text.
 #
-# The full suite is 1,000 tests for each of 500 opcodes — around 145 MB, far
-# too much for a repository and far more than is needed to catch a broken
-# instruction. Sampling keeps every opcode covered while the whole suite still
-# runs in seconds.
+# It used to sample 25 cases per opcode, and that was a mistake worth recording.
+# A wrong DAA shipped past it: the bug failed only 1% of DAA's reference cases,
+# so a 25-case sample missed it 78% of the time, and Blargg's cpu_instrs caught
+# it instead. The full suite runs in about eight seconds, which is a poor reason
+# to gamble.
 #
-#   ./scripts/fetch-tests.sh          # 25 tests per opcode (~2 MB)
-#   SAMPLE=200 ./scripts/fetch-tests.sh
+#   ./scripts/fetch-tests.sh          # everything (~145 MB)
+#   SAMPLE=25 ./scripts/fetch-tests.sh    # sampled, for a slow connection
 #
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/GameBoyKitTests/Resources/sm83"
 BASE="https://raw.githubusercontent.com/SingleStepTests/sm83/main/v1"
-SAMPLE="${SAMPLE:-25}"
+SAMPLE="${SAMPLE:-0}"     # 0 keeps every case
 
-rm -rf "$OUT" && mkdir -p "$OUT"
-echo "▸ Fetching SM83 tests ($SAMPLE per opcode) into $OUT"
+# Cleared each run: an interrupted download leaves "cb00 2.json"
+# duplicates behind, which silently inflate the opcode count.
+rm -rf "$OUT" && mkdir -p "$OUT" && touch "$OUT/.gitkeep"
+echo "▸ Fetching SM83 tests ($([ "$SAMPLE" -eq 0 ] && echo "all cases" || echo "$SAMPLE per opcode")) into $OUT"
 
 # $1 = URL prefix (percent-encoded), $2 = local filename prefix.
 # The CB-prefixed page is published as "cb 00.json" — with a literal space,
@@ -36,7 +40,8 @@ fetch_page() {
 import json, random
 tests = json.load(open('$out.tmp'))
 random.seed(0)                       # deterministic: same sample every run
-sample = tests if len(tests) <= $SAMPLE else random.sample(tests, $SAMPLE)
+limit = $SAMPLE
+sample = tests if limit == 0 or len(tests) <= limit else random.sample(tests, limit)
 json.dump(sample, open('$out', 'w'), separators=(',', ':'))
 "
       rm -f "$out.tmp"

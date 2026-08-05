@@ -5,10 +5,16 @@ Cartridge.xcodeproj/
 *.xcuserstate
 xcuserdata/
 
-# ROMs are copyrighted and must never be committed.
+# ROMs are copyrighted and must never be committed. The test ROMs are an
+# exception in law but not in policy — scripts/fetch-roms.sh downloads them,
+# so the repository holds no binaries at all.
 *.gb
 *.gbc
 *.gba
 
-# Fetched test suites are large and reproducible from scripts/fetch-tests.sh
-GameBoyKitTests/Resources/sm83/
+# Fetched test data, reproducible from the scripts. The directories themselves
+# are tracked so that project generation doesn't fail on a fresh clone.
+GameBoyKitTests/Resources/sm83/*
+GameBoyKitTests/Resources/roms/*
+!GameBoyKitTests/Resources/sm83/.gitkeep
+!GameBoyKitTests/Resources/roms/.gitkeep

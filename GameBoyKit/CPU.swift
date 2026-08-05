@@ -16,6 +16,19 @@ public protocol Bus: AnyObject {
     func write(_ address: UInt16, _ value: UInt8)
 }
 
+/// The five interrupt sources.
+///
+/// Their bit order in `IF` and `IE` is also their priority order, and also the
+/// order of their handler addresses from 0x40 upward in eight-byte steps — which
+/// is why dispatch can be arithmetic rather than a table.
+public enum Interrupt: UInt8, CaseIterable, Sendable {
+    case vblank = 0x01
+    case lcdStatus = 0x02
+    case timer = 0x04
+    case serial = 0x08
+    case joypad = 0x10
+}
+
 /// The Sharp SM83 — the Game Boy's processor.
 ///
 /// Often called "a Z80" and it isn't; it's closer to an 8080 with a handful of
@@ -25,7 +38,7 @@ public protocol Bus: AnyObject {
 /// Timing is counted in **M-cycles** (one machine cycle, four clocks). Every
 /// memory access is exactly one M-cycle, which is what makes the cycle counts
 /// come out right almost for free.
-public final class CPU {
+public final class CPU: Codable {
     public var registers: Registers
 
     /// Interrupt master enable.
@@ -46,6 +59,14 @@ public final class CPU {
 
     public init(registers: Registers = .afterBoot) {
         self.registers = registers
+    }
+
+    /// Flags an interrupt as pending. Whether it's taken is up to `IE` and the
+    /// master enable; a source that isn't enabled still sets its flag, and the
+    /// flag still wakes the CPU from `HALT`.
+    @inline(__always)
+    public func request(_ interrupt: Interrupt) {
+        interruptFlags |= interrupt.rawValue
     }
 
     // MARK: - Stepping
