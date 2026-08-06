@@ -6,6 +6,11 @@
 import Foundation
 import CoreGraphics
 import Observation
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 /// Owns the running core and everything around it that isn't emulation: the
 /// frame clock, save files, and turning a framebuffer into something SwiftUI
@@ -33,6 +38,27 @@ final class Emulator {
     private(set) var isRunning = false
     private(set) var errorMessage: String?
 
+    init(library: GameLibrary) {
+        self.library = library
+        observeTermination()
+    }
+
+    /// Quitting mid-game has to write the battery save.
+    ///
+    /// Backgrounding already does, but on the Mac quitting doesn't reliably go
+    /// through a scene phase change first — and the thing at stake is somebody's
+    /// save file, which is the one piece of state the app can't reconstruct.
+    private func observeTermination() {
+        #if os(macOS)
+        let name = NSApplication.willTerminateNotification
+        #else
+        let name = UIApplication.willTerminateNotification
+        #endif
+        NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { self.pause() }
+        }
+    }
+
     var speed: Speed = .normal { didSet { restartClock() } }
     /// Held rather than toggled — the fast-forward button in the UI.
     var isBoosting = false { didSet { restartClock() } }
@@ -45,7 +71,10 @@ final class Emulator {
     nonisolated(unsafe) private let audio = AudioOutput()
     private let queue = DispatchQueue(label: "me.jacobsilva.Cartridge.emulation", qos: .userInteractive)
     private var clock: DispatchSourceTimer?
-    private var saveKey: String?
+    private(set) var entry: GameEntry?
+    private let library: GameLibrary
+    /// When the current stretch of play began, for the library's time counter.
+    private var sessionStart: Date?
     /// Cartridge RAM is written back when play stops rather than when it
     /// changes, because games write to it constantly and a flush per write
     /// would mean a disk write per frame.
@@ -53,107 +82,63 @@ final class Emulator {
 
     // MARK: - Loading
 
-    func load(url: URL) {
-        // Files handed over by the document picker live outside the sandbox.
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-
+    /// Starts a game from the library.
+    func play(_ entry: GameEntry, romURL url: URL) {
         do {
             let data = try Data(contentsOf: url)
             stop()
 
-            try queue.sync {
-                try core.insert(cartridge: data)
-            }
+            try queue.sync { try core.insert(cartridge: data) }
 
-            let key = url.deletingPathExtension().lastPathComponent
-            saveKey = key
-            title = url.deletingPathExtension().lastPathComponent
-            subtitle = queue.sync { core.header?.description }
+            self.entry = entry
+            title = entry.title
+            subtitle = entry.subtitle
             errorMessage = nil
 
-            hasBattery = queue.sync { core.header?.hasBattery ?? false }
-            if hasBattery, let saved = SaveStore.batteryRAM(for: key) {
+            hasBattery = entry.hasBattery
+            if hasBattery, let saved = SaveStore.batteryRAM(for: entry.id) {
                 queue.sync { core.batteryRAM = saved }
             }
-            rememberROM(url)
             start()
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription
-                ?? "That file couldn't be opened."
+                ?? "That game couldn't be opened."
+            self.entry = nil
             title = nil
             subtitle = nil
         }
     }
 
-    /// Reopens whatever was being played last, so launching the app picks up
-    /// where it left off instead of asking for a file every time.
-    ///
-    /// Stored as a bookmark rather than a path: on iOS the container the file
-    /// lives in moves between launches, and a path recorded today is wrong
-    /// tomorrow.
-    func restoreLastSession() {
-        if let path = Self.launchArgumentROM {
-            load(url: URL(fileURLWithPath: path))
-            return
-        }
-
-        guard let data = UserDefaults.standard.data(forKey: Self.lastROMKey) else { return }
-        var isStale = false
-        guard let url = try? URL(
-            resolvingBookmarkData: data,
-            options: Self.bookmarkResolution,
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
-        ) else { return }
-
-        load(url: url)
-    }
-
-    private func rememberROM(_ url: URL) {
-        // A security-scoped bookmark needs the sandbox entitlement to create.
-        // Falling back keeps the un-sandboxed Mac build working rather than
-        // silently forgetting every ROM it opens.
-        let data = (try? url.bookmarkData(
-            options: Self.bookmarkCreation, includingResourceValuesForKeys: nil, relativeTo: nil
-        )) ?? (try? url.bookmarkData())
-        UserDefaults.standard.set(data, forKey: Self.lastROMKey)
-    }
-
-    private static let lastROMKey = "lastROM"
-
-    /// `-rom <path>`, for launching straight into a game from the command line.
-    private static var launchArgumentROM: String? {
-        let arguments = ProcessInfo.processInfo.arguments
-        guard let flag = arguments.firstIndex(of: "-rom"), flag + 1 < arguments.count else {
-            return nil
-        }
-        return arguments[flag + 1]
-    }
-
-    #if os(macOS)
-    private static let bookmarkCreation: URL.BookmarkCreationOptions = [.withSecurityScope]
-    private static let bookmarkResolution: URL.BookmarkResolutionOptions = [.withSecurityScope]
-    #else
-    private static let bookmarkCreation: URL.BookmarkCreationOptions = []
-    private static let bookmarkResolution: URL.BookmarkResolutionOptions = []
-    #endif
-
     // MARK: - Running
 
     func start() {
-        guard title != nil, !isRunning else { return }
+        guard entry != nil, !isRunning else { return }
         isRunning = true
+        sessionStart = .now
         audio.start()
         restartClock()
     }
 
     func pause() {
+        guard isRunning else { return }
         isRunning = false
         clock?.cancel()
         clock = nil
         audio.stop()
         flushBatteryRAM()
+        recordSession()
+    }
+
+    /// Play time and the tile image, written whenever play stops — which is
+    /// also every time the app is backgrounded, so a session that ends by the
+    /// phone being locked still counts.
+    private func recordSession() {
+        guard let entry else { return }
+        if let start = sessionStart {
+            library.recordPlay(entry, seconds: Date.now.timeIntervalSince(start))
+            sessionStart = nil
+        }
+        if let frame { library.recordCover(frame, for: entry) }
     }
 
     func stop() {
@@ -161,7 +146,7 @@ final class Emulator {
         frame = nil
         title = nil
         subtitle = nil
-        saveKey = nil
+        entry = nil
     }
 
     func togglePause() { isRunning ? pause() : start() }
@@ -207,7 +192,7 @@ final class Emulator {
     // MARK: - Saving
 
     func saveState(slot: Int) {
-        guard let saveKey else { return }
+        guard let saveKey = entry?.id else { return }
         queue.async {
             guard let data = try? self.core.saveState() else { return }
             SaveStore.write(state: data, for: saveKey, slot: slot)
@@ -215,21 +200,25 @@ final class Emulator {
     }
 
     func loadState(slot: Int) {
-        guard let saveKey, let data = SaveStore.state(for: saveKey, slot: slot) else { return }
+        guard let saveKey = entry?.id,
+              let data = SaveStore.state(for: saveKey, slot: slot) else { return }
         queue.async { try? self.core.loadState(data) }
     }
 
     func hasState(slot: Int) -> Bool {
-        guard let saveKey else { return false }
+        guard let saveKey = entry?.id else { return false }
         return SaveStore.hasState(for: saveKey, slot: slot)
     }
 
     /// Called when the app goes to the background, and on pause. Losing
     /// cartridge RAM is losing someone's save file, so it's worth being eager.
     func flushBatteryRAM() {
-        guard let saveKey, hasBattery else { return }
-        queue.async {
-            guard let ram = self.core.batteryRAM else { return }
+        guard let saveKey = entry?.id, hasBattery else { return }
+        // Synchronous deliberately. This runs when play stops, not per frame,
+        // and one of the callers is the app on its way out — an async write
+        // there would be a save file that never lands.
+        queue.sync {
+            guard let ram = core.batteryRAM else { return }
             SaveStore.write(batteryRAM: ram, for: saveKey)
         }
     }

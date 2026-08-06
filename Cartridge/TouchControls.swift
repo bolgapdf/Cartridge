@@ -8,28 +8,44 @@ import SwiftUI
 
 /// On-screen controls, laid out the way the hardware was.
 ///
-/// Every button carries its own zero-distance drag gesture rather than a
-/// `ConsoleButton`, for two reasons: a tap gesture only fires on release, and this way
-/// sliding a thumb from left to up on the d-pad releases one direction and
-/// presses the other without lifting — which is how anyone who played the
-/// original expects a d-pad to behave.
+/// Split into halves so the same pieces can sit under the screen in portrait or
+/// flank it in landscape. Landscape is the one that matters on a phone — it's
+/// the only way to get a 160×144 screen large enough to read without pushing
+/// the buttons somewhere your thumbs aren't.
 struct TouchControls: View {
+    enum Half { case left, right, both }
+
     let emulator: Emulator
+    let half: Half
 
     var body: some View {
-        VStack(spacing: 18) {
-            HStack(alignment: .center) {
-                DirectionalPad(emulator: emulator)
-                Spacer(minLength: 24)
-                FaceButtons(emulator: emulator)
-            }
+        switch half {
+        case .left:
+            DirectionalPad(emulator: emulator)
+                .padding(.horizontal, 18)
 
-            HStack(spacing: 28) {
-                PillButton(title: "SELECT", button: .select, emulator: emulator)
+        case .right:
+            VStack(spacing: 22) {
+                FaceButtons(emulator: emulator)
                 PillButton(title: "START", button: .start, emulator: emulator)
+                PillButton(title: "SELECT", button: .select, emulator: emulator)
             }
+            .padding(.horizontal, 18)
+
+        case .both:
+            VStack(spacing: 18) {
+                HStack(alignment: .center) {
+                    DirectionalPad(emulator: emulator)
+                    Spacer(minLength: 24)
+                    FaceButtons(emulator: emulator)
+                }
+                HStack(spacing: 28) {
+                    PillButton(title: "SELECT", button: .select, emulator: emulator)
+                    PillButton(title: "START", button: .start, emulator: emulator)
+                }
+            }
+            .padding(.vertical, 12)
         }
-        .padding(.vertical, 12)
     }
 }
 
@@ -71,7 +87,7 @@ private struct FaceButtons: View {
     let emulator: Emulator
 
     var body: some View {
-        // Rotated, because A and B sit on a diagonal rather than side by side.
+        // Offset, because A and B sit on a diagonal rather than side by side.
         HStack(spacing: 18) {
             round(.b, "B").offset(y: 16)
             round(.a, "A")
@@ -109,6 +125,11 @@ private struct PillButton: View {
 }
 
 /// Turns any view into a press-and-hold control wired to one console button.
+///
+/// A zero-distance drag rather than a `Button`, for two reasons: a tap gesture
+/// only fires on release, and this way sliding a thumb from left to up on the
+/// d-pad releases one direction and presses the other without lifting — which
+/// is how anyone who played the original expects a d-pad to behave.
 private struct PressableSurface<Content: View>: View {
     let button: ConsoleButton
     let emulator: Emulator
