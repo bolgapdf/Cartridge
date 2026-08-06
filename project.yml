@@ -39,6 +39,11 @@ targets:
           # The core is a tight interpreter loop. An unoptimised debug build
           # runs roughly an order of magnitude too slowly to play.
           SWIFT_OPTIMIZATION_LEVEL: "-O"
+          # And `-O` alone isn't enough. Debug compiles a file at a time, so
+          # nothing inlines across the CPU, the bus and the PPU — which is
+          # every hot call there is, since one instruction crosses all three.
+          # Measured on a real game: 33% of a core per file, 8% whole-module.
+          SWIFT_COMPILATION_MODE: wholemodule
     settings_iOS:
       base:
         INFOPLIST_KEY_UILaunchScreen_Generation: true

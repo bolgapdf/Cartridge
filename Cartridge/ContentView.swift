@@ -36,6 +36,7 @@ struct ContentView: View {
             emulator.load(url: url)
             return true
         }
+        .task { emulator.restoreLastSession() }
         .focusable()
         .focusEffectDisabled()
         .onKeyPress(phases: [.down, .up]) { press in
@@ -44,14 +45,26 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
-                // Only resume what backgrounding interrupted, so a game the
+                // Only resume what the system interrupted, so a game the
                 // player deliberately paused stays paused.
                 if wasInterrupted { emulator.start() }
                 wasInterrupted = false
-            default:
+
+            case .background:
                 // The last reliable moment to write the save file.
                 wasInterrupted = emulator.isRunning
                 emulator.pause()
+
+            default:
+                // `.inactive` means different things per platform. On iOS it's
+                // the app switcher or a notification being pulled down, and
+                // stopping is right. On the Mac it only means another window
+                // took focus, and a game that halts every time you glance at
+                // another app is unusable.
+                #if os(iOS)
+                wasInterrupted = emulator.isRunning
+                emulator.pause()
+                #endif
             }
         }
     }
@@ -60,7 +73,10 @@ struct ContentView: View {
 
     private var gameplay: some View {
         VStack(spacing: 0) {
-            ScreenView(frame: emulator.frame)
+            // A view of its own so that the sixty-times-a-second frame update
+            // invalidates only the screen. Read here, `emulator.frame` would
+            // make the whole body — toolbar, menus and all — depend on it.
+            GameScreen(emulator: emulator)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             #if os(iOS)
@@ -172,22 +188,73 @@ struct ContentView: View {
 
 // MARK: - Screen
 
-struct ScreenView: View {
-    let frame: CGImage?
+private struct GameScreen: View {
+    let emulator: Emulator
 
     var body: some View {
-        ZStack {
-            Color.black
-            if let frame {
-                Image(decorative: frame, scale: 1)
-                    // Every pixel is being drawn at ten times its size or more.
-                    // Smoothing turns a deliberately chunky picture into a
-                    // blurry one.
-                    .interpolation(.none)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-            }
-        }
+        ScreenView(frame: emulator.frame)
+    }
+}
+
+#if os(macOS)
+typealias PlatformViewRepresentable = NSViewRepresentable
+typealias PlatformView = NSView
+#else
+typealias PlatformViewRepresentable = UIViewRepresentable
+typealias PlatformView = UIView
+#endif
+
+/// The screen, drawn by handing each frame straight to Core Animation.
+///
+/// This started as `Image(decorative:)`, which was correct and far too
+/// expensive: a new `CGImage` sixty times a second sent SwiftUI through its
+/// image-preparation path on every frame, colour-converting the bitmap on three
+/// worker threads. Profiling put the emulator itself at well under half the
+/// process's CPU and that pipeline at the rest.
+///
+/// A layer's `contents` takes a `CGImage` with none of that. The layer also
+/// handles the scaling and the letterboxing, which is why there's no
+/// `aspectRatio` here.
+private extension PlatformView {
+    /// `NSView.layer` is optional and only exists once the view asks for one;
+    /// `UIView.layer` is neither. One name papers over the difference.
+    var screenLayer: CALayer? {
+        #if os(macOS)
+        wantsLayer = true
+        #endif
+        return layer
+    }
+}
+
+struct ScreenView: PlatformViewRepresentable {
+    let frame: CGImage?
+
+    func makeNSView(context: Context) -> PlatformView { makeView() }
+    func updateNSView(_ view: PlatformView, context: Context) { update(view) }
+    func makeUIView(context: Context) -> PlatformView { makeView() }
+    func updateUIView(_ view: PlatformView, context: Context) { update(view) }
+
+    private func makeView() -> PlatformView {
+        let view = PlatformView()
+        guard let layer = view.screenLayer else { return view }
+        layer.backgroundColor = CGColor(gray: 0, alpha: 1)
+        layer.contentsGravity = .resizeAspect
+        // Every pixel is drawn at ten times its size or more, so smoothing
+        // would turn a deliberately chunky picture into a blurry one.
+        layer.magnificationFilter = .nearest
+        layer.minificationFilter = .nearest
+        return view
+    }
+
+    private func update(_ view: PlatformView) {
+        guard let layer = view.screenLayer else { return }
+        // Without this, Core Animation cross-fades between frames — a quarter
+        // second of implicit animation applied to something that changes every
+        // sixteen milliseconds.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.contents = frame
+        CATransaction.commit()
     }
 }
 

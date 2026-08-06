@@ -75,6 +75,7 @@ final class Emulator {
             if hasBattery, let saved = SaveStore.batteryRAM(for: key) {
                 queue.sync { core.batteryRAM = saved }
             }
+            rememberROM(url)
             start()
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription
@@ -83,6 +84,59 @@ final class Emulator {
             subtitle = nil
         }
     }
+
+    /// Reopens whatever was being played last, so launching the app picks up
+    /// where it left off instead of asking for a file every time.
+    ///
+    /// Stored as a bookmark rather than a path: on iOS the container the file
+    /// lives in moves between launches, and a path recorded today is wrong
+    /// tomorrow.
+    func restoreLastSession() {
+        if let path = Self.launchArgumentROM {
+            load(url: URL(fileURLWithPath: path))
+            return
+        }
+
+        guard let data = UserDefaults.standard.data(forKey: Self.lastROMKey) else { return }
+        var isStale = false
+        guard let url = try? URL(
+            resolvingBookmarkData: data,
+            options: Self.bookmarkResolution,
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        ) else { return }
+
+        load(url: url)
+    }
+
+    private func rememberROM(_ url: URL) {
+        // A security-scoped bookmark needs the sandbox entitlement to create.
+        // Falling back keeps the un-sandboxed Mac build working rather than
+        // silently forgetting every ROM it opens.
+        let data = (try? url.bookmarkData(
+            options: Self.bookmarkCreation, includingResourceValuesForKeys: nil, relativeTo: nil
+        )) ?? (try? url.bookmarkData())
+        UserDefaults.standard.set(data, forKey: Self.lastROMKey)
+    }
+
+    private static let lastROMKey = "lastROM"
+
+    /// `-rom <path>`, for launching straight into a game from the command line.
+    private static var launchArgumentROM: String? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let flag = arguments.firstIndex(of: "-rom"), flag + 1 < arguments.count else {
+            return nil
+        }
+        return arguments[flag + 1]
+    }
+
+    #if os(macOS)
+    private static let bookmarkCreation: URL.BookmarkCreationOptions = [.withSecurityScope]
+    private static let bookmarkResolution: URL.BookmarkResolutionOptions = [.withSecurityScope]
+    #else
+    private static let bookmarkCreation: URL.BookmarkCreationOptions = []
+    private static let bookmarkResolution: URL.BookmarkResolutionOptions = []
+    #endif
 
     // MARK: - Running
 
@@ -161,7 +215,7 @@ final class Emulator {
 
     func hasState(slot: Int) -> Bool {
         guard let saveKey else { return false }
-        return SaveStore.state(for: saveKey, slot: slot) != nil
+        return SaveStore.hasState(for: saveKey, slot: slot)
     }
 
     /// Called when the app goes to the background, and on pause. Losing
@@ -180,6 +234,9 @@ final class Emulator {
     ///
     /// The screen is 160×144 being drawn at up to twenty times that, so any
     /// smoothing turns a deliberately chunky image into a blurry one.
+    nonisolated private static let colorSpace =
+        CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+
     nonisolated private static func image(from pixels: [UInt32]) -> CGImage? {
         let width = GameBoy.screenSize.width
         let height = GameBoy.screenSize.height
@@ -191,7 +248,10 @@ final class Emulator {
             return CGImage(
                 width: width, height: height,
                 bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
-                space: CGColorSpaceCreateDeviceRGB(),
+                // sRGB rather than DeviceRGB: the compositor converts anything
+                // whose colour space it can't match, and that conversion is a
+                // full re-render of the bitmap on every frame.
+                space: Self.colorSpace,
                 bitmapInfo: CGBitmapInfo(
                     rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue
                         | CGBitmapInfo.byteOrder32Little.rawValue
@@ -231,6 +291,13 @@ enum SaveStore {
 
     static func state(for key: String, slot: Int) -> Data? {
         try? Data(contentsOf: url("\(key).state\(slot)"))
+    }
+
+    /// Deliberately not `state(for:slot:) != nil`. That version read every byte
+    /// of the file to answer a question about its existence, from a menu that
+    /// SwiftUI re-evaluated on every frame.
+    static func hasState(for key: String, slot: Int) -> Bool {
+        FileManager.default.fileExists(atPath: url("\(key).state\(slot)").path)
     }
 
     static func write(state: Data, for key: String, slot: Int) {
