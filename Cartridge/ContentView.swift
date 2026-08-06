@@ -6,30 +6,48 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var library = GameLibrary()
-    @State private var emulator: Emulator?
+    @State private var library: GameLibrary
+    @State private var emulator: Emulator
     @State private var playing: GameEntry?
 
+    /// The player replaces the library rather than being pushed onto it.
+    ///
+    /// As a navigation destination it inherited a navigation bar, and hiding
+    /// that bar didn't reclaim the space it had already reserved — the whole
+    /// screen sat centred in the leftover, with a band of dead black above and
+    /// below. A game wants the window, not a page inside one.
+    ///
+    /// Both objects below are built here, once, and neither is optional.
+    ///
+    /// The emulator used to be an optional created on first play, which meant
+    /// the navigation destination read `if let emulator` — and a destination
+    /// closure captured before that value was set pushed an *empty* screen. The
+    /// game ran, the audio played, and there was nothing to look at. An empty
+    /// `if let` branch is a silent blank page, so there shouldn't be one on the
+    /// path to the only screen that matters.
+    @MainActor
+    init() {
+        let library = GameLibrary()
+        _library = State(initialValue: library)
+        _emulator = State(initialValue: Emulator(library: library))
+    }
+
     var body: some View {
-        NavigationStack {
-            LibraryView(library: library, play: start)
-                .navigationDestination(item: $playing) { _ in
-                    if let emulator {
-                        PlayerView(emulator: emulator) { playing = nil }
-                    }
+        ZStack {
+            if playing != nil {
+                PlayerView(emulator: emulator) { playing = nil }
+            } else {
+                NavigationStack {
+                    LibraryView(library: library, play: start)
                 }
+            }
         }
         .preferredColorScheme(.dark)
         .task { openLaunchArgumentROM() }
     }
 
     private func start(_ entry: GameEntry) {
-        // One emulator for the life of the app rather than one per game: it
-        // owns an audio engine, and building a new one per launch means a new
-        // audio graph each time.
-        let engine = emulator ?? Emulator(library: library)
-        emulator = engine
-        engine.play(entry, romURL: library.romURL(for: entry))
+        emulator.play(entry, romURL: library.romURL(for: entry))
         playing = entry
     }
 
@@ -96,6 +114,29 @@ struct ScreenView: PlatformViewRepresentable {
     func updateNSView(_ view: PlatformView, context: Context) { update(view) }
     func makeUIView(context: Context) -> PlatformView { makeView() }
     func updateUIView(_ view: PlatformView, context: Context) { update(view) }
+
+    /// Takes whatever space it's offered.
+    ///
+    /// Without this a representable reports the wrapped view's own size, which
+    /// for a plain `UIView`/`NSView` is nothing — so `maxHeight: .infinity` had
+    /// no effect, the screen stayed small and the layout floated in the middle
+    /// of a lot of black. The layer letterboxes inside whatever it's given, so
+    /// accepting the full proposal is safe.
+    func sizeThatFits(
+        _ proposal: ProposedViewSize, nsView: PlatformView, context: Context
+    ) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(
+            by: CGSize(width: GameBoy.screenSize.width, height: GameBoy.screenSize.height)
+        )
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize, uiView: PlatformView, context: Context
+    ) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(
+            by: CGSize(width: GameBoy.screenSize.width, height: GameBoy.screenSize.height)
+        )
+    }
 
     private func makeView() -> PlatformView {
         let view = PlatformView()

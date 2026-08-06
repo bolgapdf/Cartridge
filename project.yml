@@ -34,6 +34,21 @@ targets:
         ENABLE_PREVIEWS: true
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+
+        # Per-platform settings go through Xcode's own `[sdk=...]` conditions.
+        # `settings_iOS:` / `settings_macOS:` are not XcodeGen keys — they sat
+        # here being silently ignored, which left the iOS app with no launch
+        # screen. An iOS app without one runs in compatibility mode: letterboxed
+        # into a smaller logical screen with dead black bands above and below
+        # everything. It looks exactly like a SwiftUI layout bug, and no amount
+        # of changing the layout fixes it.
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+        # iPad has to offer all four orientations or it can't be used alongside
+        # another app. iPhone leaves out upside-down, as every iPhone app does.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        TARGETED_DEVICE_FAMILY[sdk=iphone*]: "1,2"
+        ENABLE_HARDENED_RUNTIME[sdk=macosx*]: true
       configs:
         Debug:
           # The core is a tight interpreter loop. An unoptimised debug build
@@ -44,17 +59,6 @@ targets:
           # every hot call there is, since one instruction crosses all three.
           # Measured on a real game: 33% of a core per file, 8% whole-module.
           SWIFT_COMPILATION_MODE: wholemodule
-    settings_iOS:
-      base:
-        INFOPLIST_KEY_UILaunchScreen_Generation: true
-        # iPad has to offer all four or it can't be used alongside another app.
-        # iPhone leaves out upside-down, as every other iPhone app does.
-        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
-        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
-        TARGETED_DEVICE_FAMILY: "1,2"
-    settings_macOS:
-      base:
-        ENABLE_HARDENED_RUNTIME: true
 
   GameBoyKitTests:
     type: bundle.unit-test
