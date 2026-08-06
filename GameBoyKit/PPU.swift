@@ -61,8 +61,8 @@ final class PPU: Codable {
 
     /// The last completed frame. Rendering goes to a second buffer so a frame
     /// is never read while it's half-drawn.
-    private(set) var frontBuffer = [UInt32](repeating: Palette.dmg[0], count: width * height)
-    private var backBuffer = [UInt32](repeating: Palette.dmg[0], count: width * height)
+    private(set) var frontBuffer = [UInt32](repeating: ScreenPalette.dmg.shades[0], count: width * height)
+    private var backBuffer = [UInt32](repeating: ScreenPalette.dmg.shades[0], count: width * height)
     /// Background colour indices for the line being drawn, kept because sprite
     /// priority is decided against the index rather than the final colour.
     private var backgroundIndices = [UInt8](repeating: 0, count: width)
@@ -70,11 +70,26 @@ final class PPU: Codable {
     /// Set for one step when a frame finished, so the shell knows to present.
     private(set) var frameCompleted = false
 
-    enum Palette {
-        /// The original screen's greens, rather than grey. The hardware only
-        /// ever produced four shades, so this is a colour choice, not a filter.
-        static let dmg: [UInt32] = [0xFF_9BBC0F, 0xFF_8BAC0F, 0xFF_306230, 0xFF_0F380F]
+    /// Everything a save state needs. The two framebuffers and the scanline's
+    /// background indices are deliberately absent: they're 185 KB between them
+    /// and they rebuild themselves within one frame of resuming.
+    private enum CodingKeys: String, CodingKey {
+        case vram, oam, control, statusFlags, scrollY, scrollX, line, lineCompare
+        case backgroundPalette, objectPalette0, objectPalette1, windowY, windowX
+        case clock, mode, windowLine, statLine, palette, ghosting
     }
+
+    /// What the four shades look like. The hardware produces two bits per
+    /// pixel and the panel decides the rest, so this is the panel.
+    var palette = ScreenPalette.dmg
+
+    /// Blends each frame into the one before it.
+    ///
+    /// The real LCD was slow, and games leaned on it: a sprite drawn every
+    /// other frame reads as half-transparent on hardware and as a flicker on an
+    /// emulator that switches instantly. Blending restores the effect the
+    /// artists were actually designing for.
+    var ghosting = false
 
     // MARK: - Register access
 
@@ -151,6 +166,7 @@ final class PPU: Codable {
             case 1:
                 // Entering VBlank completes the frame.
                 swap(&frontBuffer, &backBuffer)
+                if ghosting { blendWithPreviousFrame() }
                 frameCompleted = true
                 interrupts |= Interrupt.vblank.rawValue
             default:
@@ -172,6 +188,22 @@ final class PPU: Codable {
         return interrupts
     }
 
+    /// Averages the finished frame with the one displayed before it.
+    ///
+    /// Applied after the swap, so `backBuffer` still holds what was on screen a
+    /// moment ago. The result becomes the next frame's history too, which makes
+    /// the trail decay over several frames rather than exactly one — which is
+    /// how the panel behaved.
+    private func blendWithPreviousFrame() {
+        for index in 0..<frontBuffer.count {
+            let new = frontBuffer[index]
+            let old = backBuffer[index]
+            // Averaging each channel by masking the low bits off first, so the
+            // two halves can be added without carries crossing between them.
+            frontBuffer[index] = ((new & 0xFE_FEFEFE) >> 1) &+ ((old & 0xFE_FEFEFE) >> 1)
+        }
+    }
+
     // MARK: - Rendering
 
     private func renderLine() {
@@ -185,7 +217,7 @@ final class PPU: Codable {
             // rather than to whatever the palette maps colour 0 to.
             let start = y * Self.width
             for x in 0..<Self.width {
-                backBuffer[start + x] = Palette.dmg[0]
+                backBuffer[start + x] = palette.shades[0]
                 backgroundIndices[x] = 0
             }
         }
@@ -301,7 +333,7 @@ final class PPU: Codable {
     /// Palette registers are four two-bit fields: the colour index selects the
     /// field, and the field selects the shade.
     @inline(__always)
-    private func shade(_ colour: UInt8, through palette: UInt8) -> UInt32 {
-        Palette.dmg[Int((palette >> (colour * 2)) & 0x03)]
+    private func shade(_ colour: UInt8, through register: UInt8) -> UInt32 {
+        self.palette.shades[Int((register >> (colour * 2)) & 0x03)]
     }
 }

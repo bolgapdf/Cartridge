@@ -17,6 +17,10 @@ struct PlayerView: View {
 
     @Environment(\.scenePhase) private var scenePhase
     @State private var wasInterrupted = false
+    @State private var sharedClip: ClipExport?
+    #if os(iOS)
+    @AppStorage("useThumbstick") private var useThumbstick = true
+    #endif
 
     #if os(iOS)
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -47,6 +51,11 @@ struct PlayerView: View {
             // tile — the same work pausing does.
             emulator.stop()
         }
+        #if os(iOS)
+        .sheet(item: $sharedClip) { clip in
+            ShareSheet(items: [clip.url])
+        }
+        #endif
     }
 
     @ViewBuilder
@@ -176,6 +185,28 @@ struct PlayerView: View {
         }
         .pickerStyle(.menu)
 
+        Picker("Screen", selection: Binding(
+            get: { emulator.palette },
+            set: { emulator.palette = $0 }
+        )) {
+            ForEach(ScreenPalette.all) { Text($0.name).tag($0) }
+        }
+        .pickerStyle(.menu)
+
+        Toggle("LCD Ghosting", isOn: Binding(
+            get: { emulator.ghosting },
+            set: { emulator.ghosting = $0 }
+        ))
+
+        #if os(iOS)
+        Toggle("Thumbstick", isOn: $useThumbstick)
+        #endif
+
+        Divider()
+        Button("Save Last 6 Seconds", systemImage: "film") { exportClip() }
+            .disabled(!emulator.canSaveClip)
+        Button("Save Screenshot", systemImage: "camera") { exportScreenshot() }
+
         Divider()
         ForEach(1...3, id: \.self) { slot in
             Button("Save to Slot \(slot)", systemImage: "square.and.arrow.down") {
@@ -191,6 +222,41 @@ struct PlayerView: View {
         }
         Divider()
         Button("Reset", systemImage: "arrow.counterclockwise") { emulator.reset() }
+    }
+
+    // MARK: - Saving pictures
+
+    /// Written to a temporary file and handed to the share sheet rather than
+    /// straight into Photos: a clip of a game is more often going to someone
+    /// than into a camera roll, and this way the choice stays open.
+    private func exportClip() {
+        guard let data = emulator.makeClip() else { return }
+        let name = (emulator.title ?? "Cartridge").replacingOccurrences(of: "/", with: "_")
+        save(data, named: "\(name).gif")
+    }
+
+    private func exportScreenshot() {
+        guard let image = emulator.makeScreenshot(),
+              let data = FrameImage.png(from: image) else { return }
+        let name = (emulator.title ?? "Cartridge").replacingOccurrences(of: "/", with: "_")
+        save(data, named: "\(name).png")
+    }
+
+    private func save(_ data: Data, named name: String) {
+        let url = FileManager.default.temporaryDirectory.appending(path: name)
+        guard (try? data.write(to: url, options: .atomic)) != nil else { return }
+
+        #if os(iOS)
+        sharedClip = ClipExport(url: url)
+        #else
+        // On the Mac there's a Finder to drop it into, so it goes to Downloads
+        // and reveals itself rather than opening a share sheet nobody asked for.
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+        let destination = downloads.appending(path: name)
+        try? FileManager.default.removeItem(at: destination)
+        try? FileManager.default.moveItem(at: url, to: destination)
+        NSWorkspace.shared.activateFileViewerSelecting([destination])
+        #endif
     }
 
     // MARK: - Input

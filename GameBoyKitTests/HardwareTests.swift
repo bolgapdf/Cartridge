@@ -73,7 +73,7 @@ struct HardwareTests {
     static func screenChecksum(of system: GameBoy) -> UInt64 {
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
         for pixel in system.framebuffer {
-            let shade = UInt8(PPU.Palette.dmg.firstIndex(of: pixel) ?? 0)
+            let shade = UInt8(ScreenPalette.dmg.shades.firstIndex(of: pixel) ?? 0)
             hash = (hash ^ UInt64(shade)) &* 0x0000_0100_0000_01b3
         }
         return hash
@@ -117,6 +117,41 @@ struct HardwareTests {
         let system = try Self.machine("dmg-acid2.gb")
         system.run(frames: 120)
         #expect(Self.screenChecksum(of: system) == 0xF272_A8FF_E3DB_4C16)
+    }
+
+    // MARK: - Save states
+
+    /// A state has to reproduce the future, not just the picture.
+    ///
+    /// This is what rewind rests on: it restores a state twenty times a second
+    /// and plays forward from it, so anything left out of a snapshot shows up as
+    /// the game quietly diverging. Comparing a screen sixty frames *after* the
+    /// restore catches state that a screenshot taken immediately would not.
+    @Test("A restored state replays identically")
+    func saveStateFidelity() throws {
+        let system = try Self.machine("cpu_instrs.gb")
+        system.run(frames: 300)
+
+        let state = try system.saveState()
+        system.run(frames: 60)
+        let withoutRestore = Self.screenChecksum(of: system)
+
+        try system.loadState(state)
+        system.run(frames: 60)
+        let afterRestore = Self.screenChecksum(of: system)
+
+        #expect(withoutRestore == afterRestore, "the machine diverged after restoring")
+    }
+
+    /// States are written continuously during rewind, so their size is a
+    /// feature. This one caught the audio buffer being serialised: states were
+    /// 847 KB and took 236 ms, which is unusable at twenty a second.
+    @Test("A state is small enough to take twenty times a second")
+    func saveStateSize() throws {
+        let system = try Self.machine("cpu_instrs.gb")
+        system.run(frames: 300)
+        let state = try system.saveState()
+        #expect(state.count < 64 * 1024, "a save state is \(state.count) bytes")
     }
 
     /// The halt bug — `HALT` executed with interrupts disabled and one already

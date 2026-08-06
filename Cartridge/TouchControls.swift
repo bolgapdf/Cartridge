@@ -17,16 +17,36 @@ struct TouchControls: View {
 
     let emulator: Emulator
     let half: Half
+    /// A stick or the original cross. Some games — anything needing a single
+    /// exact direction, like a menu — are easier on the cross, so both stay.
+    @AppStorage("useThumbstick") private var useThumbstick = true
+
+    @ViewBuilder
+    private var directions: some View {
+        if useThumbstick {
+            Thumbstick(emulator: emulator)
+        } else {
+            DirectionalPad(emulator: emulator)
+        }
+    }
 
     var body: some View {
         switch half {
         case .left:
-            DirectionalPad(emulator: emulator)
+            directions
                 .padding(.horizontal, 18)
 
         case .right:
-            VStack(spacing: 22) {
+            VStack(spacing: 18) {
                 FaceButtons(emulator: emulator)
+                HStack(spacing: 14) {
+                    HoldButton(symbol: "backward.fill", label: "Rewind") {
+                        emulator.isRewinding = $0
+                    }
+                    HoldButton(symbol: "forward.fill", label: "Fast forward") {
+                        emulator.isBoosting = $0
+                    }
+                }
                 PillButton(title: "START", button: .start, emulator: emulator)
                 PillButton(title: "SELECT", button: .select, emulator: emulator)
             }
@@ -35,13 +55,19 @@ struct TouchControls: View {
         case .both:
             VStack(spacing: 18) {
                 HStack(alignment: .center) {
-                    DirectionalPad(emulator: emulator)
+                    directions
                     Spacer(minLength: 24)
                     FaceButtons(emulator: emulator)
                 }
-                HStack(spacing: 28) {
+                HStack(spacing: 20) {
+                    HoldButton(symbol: "backward.fill", label: "Rewind") {
+                        emulator.isRewinding = $0
+                    }
                     PillButton(title: "SELECT", button: .select, emulator: emulator)
                     PillButton(title: "START", button: .start, emulator: emulator)
+                    HoldButton(symbol: "forward.fill", label: "Fast forward") {
+                        emulator.isBoosting = $0
+                    }
                 }
             }
             .padding(.vertical, 12)
@@ -121,6 +147,39 @@ private struct PillButton: View {
                 .padding(.vertical, 9)
                 .background(Color(white: isDown ? 0.36 : 0.18), in: Capsule())
         }
+    }
+}
+
+/// Held to act, released to stop — rewind and fast-forward, which aren't
+/// console buttons and so don't go through the emulator's input path.
+private struct HoldButton: View {
+    let symbol: String
+    let label: String
+    let action: (Bool) -> Void
+
+    @State private var isDown = false
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(.white.opacity(isDown ? 0.95 : 0.55))
+            .frame(width: 44, height: 32)
+            .background(Color(white: isDown ? 0.36 : 0.18), in: Capsule())
+            .contentShape(Capsule())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        guard !isDown else { return }
+                        isDown = true
+                        action(true)
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    }
+                    .onEnded { _ in
+                        isDown = false
+                        action(false)
+                    }
+            )
+            .accessibilityLabel(label)
     }
 }
 

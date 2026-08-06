@@ -35,7 +35,9 @@ struct MapperState: Codable {
     var ramBank = 0
     var ramEnabled = false
     var mode = 0
-    var ram: [UInt8] = []
+    /// `Data` for the same reason the console's RAM is: a binary plist stores
+    /// bytes as bytes.
+    var ram = Data()
     /// MBC3 only: seconds of clock time, and whether the clock is stopped.
     var clockElapsed: Double = 0
     var clockHalted = false
@@ -107,8 +109,8 @@ final class NoMapper: BaseMapper, Mapper {
     }
 
     var state: MapperState {
-        get { MapperState(ram: ram) }
-        set { if newValue.ram.count == ram.count { ram = newValue.ram } }
+        get { MapperState(ram: Data(ram)) }
+        set { if newValue.ram.count == ram.count { ram = [UInt8](newValue.ram) } }
     }
 }
 
@@ -168,7 +170,7 @@ final class MBC1: BaseMapper, Mapper {
         get {
             MapperState(
                 romBank: bank1, ramBank: bank2, ramEnabled: ramEnabled,
-                mode: advancedMode ? 1 : 0, ram: ram
+                mode: advancedMode ? 1 : 0, ram: Data(ram)
             )
         }
         set {
@@ -176,7 +178,7 @@ final class MBC1: BaseMapper, Mapper {
             bank2 = newValue.ramBank
             ramEnabled = newValue.ramEnabled
             advancedMode = newValue.mode == 1
-            if newValue.ram.count == ram.count { ram = newValue.ram }
+            if newValue.ram.count == ram.count { ram = [UInt8](newValue.ram) }
         }
     }
 }
@@ -221,11 +223,11 @@ final class MBC2: BaseMapper, Mapper {
     }
 
     var state: MapperState {
-        get { MapperState(romBank: romBank, ramEnabled: ramEnabled, ram: ram) }
+        get { MapperState(romBank: romBank, ramEnabled: ramEnabled, ram: Data(ram)) }
         set {
             romBank = newValue.romBank
             ramEnabled = newValue.ramEnabled
-            if newValue.ram.count == ram.count { ram = newValue.ram }
+            if newValue.ram.count == ram.count { ram = [UInt8](newValue.ram) }
         }
     }
 }
@@ -336,7 +338,7 @@ final class MBC3: BaseMapper, Mapper {
         get {
             MapperState(
                 romBank: romBank, ramBank: bankSelect, ramEnabled: ramEnabled,
-                ram: ram, clockElapsed: elapsed, clockHalted: clockStopped,
+                ram: Data(ram), clockElapsed: elapsed, clockHalted: clockStopped,
                 latchedClock: latched
             )
         }
@@ -344,7 +346,7 @@ final class MBC3: BaseMapper, Mapper {
             romBank = newValue.romBank
             bankSelect = newValue.ramBank
             ramEnabled = newValue.ramEnabled
-            if newValue.ram.count == ram.count { ram = newValue.ram }
+            if newValue.ram.count == ram.count { ram = [UInt8](newValue.ram) }
             clockStopped = newValue.clockHalted
             stoppedElapsed = newValue.clockElapsed
             clockStart = Date().timeIntervalSince1970 - newValue.clockElapsed
@@ -391,12 +393,12 @@ final class MBC5: BaseMapper, Mapper {
     }
 
     var state: MapperState {
-        get { MapperState(romBank: romBank, ramBank: ramBank, ramEnabled: ramEnabled, ram: ram) }
+        get { MapperState(romBank: romBank, ramBank: ramBank, ramEnabled: ramEnabled, ram: Data(ram)) }
         set {
             romBank = newValue.romBank
             ramBank = newValue.ramBank
             ramEnabled = newValue.ramEnabled
-            if newValue.ram.count == ram.count { ram = newValue.ram }
+            if newValue.ram.count == ram.count { ram = [UInt8](newValue.ram) }
         }
     }
 }

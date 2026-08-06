@@ -40,6 +40,8 @@ final class Emulator {
 
     init(library: GameLibrary) {
         self.library = library
+        palette = .named(UserDefaults.standard.string(forKey: "palette") ?? "dmg")
+        ghosting = UserDefaults.standard.bool(forKey: "ghosting")
         observeTermination()
     }
 
@@ -62,6 +64,50 @@ final class Emulator {
     var speed: Speed = .normal { didSet { restartClock() } }
     /// Held rather than toggled — the fast-forward button in the UI.
     var isBoosting = false { didSet { restartClock() } }
+    /// Also held. Nothing is emulated while this is on; frames are restored
+    /// from the ring below, newest first.
+    var isRewinding = false { didSet { rewindRequested = isRewinding } }
+    /// The queue's copy. Reading the main-actor property from the emulation
+    /// queue would be a cross-actor access on every frame; a stale read here
+    /// costs one frame on a control that's held for a second.
+    nonisolated(unsafe) private var rewindRequested = false
+
+    var palette: ScreenPalette = .dmg {
+        didSet {
+            queue.async { self.core.palette = self.palette }
+            UserDefaults.standard.set(palette.id, forKey: "palette")
+        }
+    }
+
+    var ghosting = false {
+        didSet {
+            queue.async { self.core.ghosting = self.ghosting }
+            UserDefaults.standard.set(ghosting, forKey: "ghosting")
+        }
+    }
+
+    /// How much history rewind can reach back through.
+    ///
+    /// A state is taken every fourth frame, so rewinding — which restores one
+    /// per displayed frame — runs backwards at four times speed. That's how
+    /// rewind is meant to feel: you overshoot, let go, and play forward again.
+    private static let snapshotInterval = 4
+    private static let rewindSeconds = 20.0
+
+    private var rewindBuffer: [Data] = []
+    private var framesSinceSnapshot = 0
+    private var rewindCapacity: Int {
+        Int(GameBoy.frameRate * Self.rewindSeconds) / Self.snapshotInterval
+    }
+
+    /// The last several seconds of picture, for saving a clip.
+    nonisolated(unsafe) private let clipRecorder = ClipRecorder()
+
+    /// True once there's enough buffered to be worth saving.
+    var canSaveClip: Bool { queue.sync { clipRecorder.isReady } }
+
+    func makeClip() -> Data? { queue.sync { clipRecorder.makeGIF() } }
+    func makeScreenshot() -> CGImage? { queue.sync { clipRecorder.latestFrame() } }
 
     /// Isolated by `queue` rather than by the actor: every access happens
     /// inside a block dispatched there, including the ones that look
@@ -94,6 +140,14 @@ final class Emulator {
             title = entry.title
             subtitle = entry.subtitle
             errorMessage = nil
+
+            rewindBuffer.removeAll(keepingCapacity: true)
+            framesSinceSnapshot = 0
+            clipRecorder.reset()
+            queue.sync {
+                core.palette = palette
+                core.ghosting = ghosting
+            }
 
             hasBattery = entry.hasBattery
             if hasBattery, let saved = SaveStore.batteryRAM(for: entry.id) {
@@ -166,17 +220,49 @@ final class Emulator {
         timer.schedule(deadline: .now(), repeating: interval, leeway: .milliseconds(1))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
-            for _ in 0..<framesPerTick {
-                self.core.runFrame()
-                self.audio.enqueue(self.core.drainAudio())
+
+            if self.rewindRequested {
+                self.stepBackwards()
+            } else {
+                for _ in 0..<framesPerTick {
+                    self.core.runFrame()
+                    self.audio.enqueue(self.core.drainAudio())
+                    self.recordHistory()
+                }
             }
+
             // Only the finished frame crosses back to the main actor; the core
             // itself never leaves this queue.
             let pixels = self.core.framebuffer
+            self.clipRecorder.record(pixels, palette: self.core.palette)
             Task { @MainActor in self.frame = Self.image(from: pixels) }
         }
         timer.resume()
         clock = timer
+    }
+
+    // MARK: - Rewind
+
+    private func recordHistory() {
+        framesSinceSnapshot += 1
+        guard framesSinceSnapshot >= Self.snapshotInterval else { return }
+        framesSinceSnapshot = 0
+
+        guard let state = try? core.saveState() else { return }
+        rewindBuffer.append(state)
+        if rewindBuffer.count > rewindCapacity {
+            rewindBuffer.removeFirst(rewindBuffer.count - rewindCapacity)
+        }
+    }
+
+    private func stepBackwards() {
+        // The newest state is the one currently on screen, so the first pop is
+        // discarded — otherwise holding rewind would sit on the present frame.
+        guard let state = rewindBuffer.popLast() else { return }
+        try? core.loadState(state)
+        // Audio produced while scrubbing is meaningless and would otherwise
+        // pile up in the ring buffer.
+        _ = core.drainAudio()
     }
 
     // MARK: - Input
@@ -267,32 +353,8 @@ final class Emulator {
     ///
     /// The screen is 160×144 being drawn at up to twenty times that, so any
     /// smoothing turns a deliberately chunky image into a blurry one.
-    nonisolated private static let colorSpace =
-        CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-
     nonisolated private static func image(from pixels: [UInt32]) -> CGImage? {
-        let width = GameBoy.screenSize.width
-        let height = GameBoy.screenSize.height
-
-        return pixels.withUnsafeBufferPointer { buffer -> CGImage? in
-            guard let provider = CGDataProvider(data: Data(buffer: buffer) as CFData) else {
-                return nil
-            }
-            return CGImage(
-                width: width, height: height,
-                bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
-                // sRGB rather than DeviceRGB: the compositor converts anything
-                // whose colour space it can't match, and that conversion is a
-                // full re-render of the bitmap on every frame.
-                space: Self.colorSpace,
-                bitmapInfo: CGBitmapInfo(
-                    rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue
-                        | CGBitmapInfo.byteOrder32Little.rawValue
-                ),
-                provider: provider, decode: nil,
-                shouldInterpolate: false, intent: .defaultIntent
-            )
-        }
+        FrameImage.make(from: pixels)
     }
 }
 

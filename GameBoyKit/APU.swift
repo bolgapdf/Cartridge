@@ -53,6 +53,20 @@ final class APU: Codable {
     private var frameStep = 0
     private var lastDividerBit = false
 
+    /// Everything a save state needs, minus `output`.
+    ///
+    /// That buffer holds samples produced since the shell last drained it. In a
+    /// state it is both wrong — resuming shouldn't replay a second of stale
+    /// audio — and enormous: an emulator run headlessly without draining had
+    /// accumulated 3.8 MB of it, which is what a save state was carrying.
+    private enum CodingKeys: String, CodingKey {
+        case enabled, channel1, channel2, channel3, channel4
+        case leftVolume, rightVolume, panning, vinFlags
+        case frameStep, lastDividerBit
+        case accumulatedLeft, accumulatedRight, accumulatedClocks, sampleClock
+        case capacitorLeft, capacitorRight
+    }
+
     // MARK: - Output
 
     /// Interleaved stereo, drained by the shell once a frame.

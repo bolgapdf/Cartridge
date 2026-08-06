@@ -138,6 +138,17 @@ public final class GameBoy: EmulatedSystem, Bus {
 
     public var framebuffer: [UInt32] { ppu.frontBuffer }
 
+    /// What the four shades look like, and whether frames blend into each other.
+    public var palette: ScreenPalette {
+        get { ppu.palette }
+        set { ppu.palette = newValue }
+    }
+
+    public var ghosting: Bool {
+        get { ppu.ghosting }
+        set { ppu.ghosting = newValue }
+    }
+
     public func set(_ button: ConsoleButton, pressed: Bool) {
         if joypad.set(button, pressed: pressed) { cpu.request(.joypad) }
     }
@@ -307,27 +318,43 @@ public final class GameBoy: EmulatedSystem, Bus {
         var timer: SystemTimer
         var apu: APU
         var joypad: Joypad
-        var workRAM: [UInt8]
-        var highRAM: [UInt8]
-        var unmappedIO: [UInt8]
+        // `Data` rather than `[UInt8]`: a binary plist stores it as raw bytes,
+        // where an array of integers becomes one boxed object per byte.
+        var workRAM: Data
+        var highRAM: Data
+        var unmappedIO: Data
         var mapper: MapperState
         var carriedCycles: Int
     }
 
+    /// Binary rather than JSON, and compressed.
+    ///
+    /// JSON wrote every byte of RAM as a decimal number with a comma after it,
+    /// which is fine once when someone taps Save and hopeless twenty times a
+    /// second for rewind. A binary property list stores `Data` as bytes, and
+    /// the RAM of a running game is mostly zeroes, so it compresses hard.
     public func saveState() throws -> Data {
         guard let cartridge else { throw SystemError.corruptSaveState }
         let snapshot = Snapshot(
             title: cartridge.header.title,
             cpu: cpu, ppu: ppu, timer: timer, apu: apu, joypad: joypad,
-            workRAM: workRAM, highRAM: highRAM, unmappedIO: unmappedIO,
+            workRAM: Data(workRAM), highRAM: Data(highRAM), unmappedIO: Data(unmappedIO),
             mapper: cartridge.state, carriedCycles: carriedCycles
         )
-        return try JSONEncoder().encode(snapshot)
+
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        let plist = try encoder.encode(snapshot)
+        return (try? (plist as NSData).compressed(using: .zlib) as Data) ?? plist
     }
 
     public func loadState(_ data: Data) throws {
         guard let cartridge else { throw SystemError.corruptSaveState }
-        guard let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data),
+
+        // Uncompressed states are accepted too, so a file written before
+        // compression existed still loads.
+        let plist = (try? (data as NSData).decompressed(using: .zlib) as Data) ?? data
+        guard let snapshot = try? PropertyListDecoder().decode(Snapshot.self, from: plist),
               snapshot.title == cartridge.header.title
         else { throw SystemError.corruptSaveState }
 
@@ -336,9 +363,9 @@ public final class GameBoy: EmulatedSystem, Bus {
         timer = snapshot.timer
         joypad = snapshot.joypad
         apu = snapshot.apu
-        workRAM = snapshot.workRAM
-        highRAM = snapshot.highRAM
-        unmappedIO = snapshot.unmappedIO
+        workRAM = [UInt8](snapshot.workRAM)
+        highRAM = [UInt8](snapshot.highRAM)
+        unmappedIO = [UInt8](snapshot.unmappedIO)
         cartridge.state = snapshot.mapper
         carriedCycles = snapshot.carriedCycles
     }
