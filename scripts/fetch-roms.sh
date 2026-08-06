@@ -34,6 +34,7 @@ get "$BLARGG/cpu_instrs/cpu_instrs.gb"     "cpu_instrs.gb"
 get "$BLARGG/instr_timing/instr_timing.gb" "instr_timing.gb"
 get "$BLARGG/mem_timing/mem_timing.gb"     "mem_timing.gb"
 get "$BLARGG/halt_bug.gb"                  "halt_bug.gb"
+get "$BLARGG/dmg_sound/dmg_sound.gb"       "dmg_sound.gb"
 get "$ACID2"                               "dmg-acid2.gb"
 
 echo "✅ $(ls "$OUT" | wc -l | tr -d ' ') ROMs"

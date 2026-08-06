@@ -42,6 +42,7 @@ final class Emulator {
     /// synchronous. The compiler can't see a serial queue as an isolation
     /// domain, so the contract has to be stated rather than inferred.
     nonisolated(unsafe) private let core = GameBoy()
+    nonisolated(unsafe) private let audio = AudioOutput()
     private let queue = DispatchQueue(label: "me.jacobsilva.Cartridge.emulation", qos: .userInteractive)
     private var clock: DispatchSourceTimer?
     private var saveKey: String?
@@ -143,6 +144,7 @@ final class Emulator {
     func start() {
         guard title != nil, !isRunning else { return }
         isRunning = true
+        audio.start()
         restartClock()
     }
 
@@ -150,6 +152,7 @@ final class Emulator {
         isRunning = false
         clock?.cancel()
         clock = nil
+        audio.stop()
         flushBatteryRAM()
     }
 
@@ -178,7 +181,10 @@ final class Emulator {
         timer.schedule(deadline: .now(), repeating: interval, leeway: .milliseconds(1))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
-            for _ in 0..<framesPerTick { self.core.runFrame() }
+            for _ in 0..<framesPerTick {
+                self.core.runFrame()
+                self.audio.enqueue(self.core.drainAudio())
+            }
             // Only the finished frame crosses back to the main actor; the core
             // itself never leaves this queue.
             let pixels = self.core.framebuffer

@@ -26,13 +26,13 @@ public final class GameBoy: EmulatedSystem, Bus {
     var ppu = PPU()
     var timer = SystemTimer()
     var joypad = Joypad()
+    var apu = APU()
     private var cartridge: GameCartridge?
 
     private var workRAM = [UInt8](repeating: 0, count: 0x2000)
     private var highRAM = [UInt8](repeating: 0, count: 0x7F)
-    /// Registers this core doesn't model yet — chiefly the four sound channels.
-    /// Storing the writes lets a game read back what it wrote, which is all most
-    /// of them check for.
+    /// Registers this core doesn't model. Storing the writes lets a game read
+    /// back what it wrote, which is all most of them check for.
     private var unmappedIO = [UInt8](repeating: 0, count: 0x80)
 
     private var serialData: UInt8 = 0
@@ -75,6 +75,7 @@ public final class GameBoy: EmulatedSystem, Bus {
         ppu = PPU()
         timer = SystemTimer()
         joypad = Joypad()
+        apu = APU()
         workRAM = [UInt8](repeating: 0, count: 0x2000)
         highRAM = [UInt8](repeating: 0, count: 0x7F)
         serialOutput = ""
@@ -103,6 +104,10 @@ public final class GameBoy: EmulatedSystem, Bus {
         guard clocks > 0 else { return }
         if timer.step(clocks) { cpu.request(.timer) }
         cpu.interruptFlags |= ppu.step(clocks)
+        // The sound hardware's frame sequencer is driven by a bit of the
+        // divider rather than by a counter of its own, so it's read here after
+        // the timer has advanced.
+        apu.step(clocks, dividerBit: timer.counter & 0x1000 != 0)
     }
 
     /// One M-cycle, charged to the bus access that caused it.
@@ -137,10 +142,7 @@ public final class GameBoy: EmulatedSystem, Bus {
         if joypad.set(button, pressed: pressed) { cpu.request(.joypad) }
     }
 
-    /// Not yet implemented — the sound hardware is the next piece of work.
-    /// Returning nothing is honest; returning silence at the right length would
-    /// hide the gap behind a working-looking audio clock.
-    public func drainAudio() -> [Float] { [] }
+    public func drainAudio() -> [Float] { apu.drain() }
 
     public func clearSerialOutput() { serialOutput = "" }
 
@@ -214,6 +216,7 @@ public final class GameBoy: EmulatedSystem, Bus {
         // The top three bits of IF aren't connected and read high, which is why
         // so much code writes 0xE0-masked values back to it.
         case 0xFF0F: cpu.interruptFlags | 0xE0
+        case 0xFF10...0xFF3F: apu.read(address)
         case 0xFF40: ppu.control
         case 0xFF41: ppu.status
         case 0xFF42: ppu.scrollY
@@ -239,6 +242,7 @@ public final class GameBoy: EmulatedSystem, Bus {
         case 0xFF06: timer.modulo = value
         case 0xFF07: timer.writeControl(value)
         case 0xFF0F: cpu.interruptFlags = value & 0x1F
+        case 0xFF10...0xFF3F: apu.write(address, value)
         case 0xFF40: ppu.control = value
         case 0xFF41: ppu.status = value
         case 0xFF42: ppu.scrollY = value
@@ -301,6 +305,7 @@ public final class GameBoy: EmulatedSystem, Bus {
         var cpu: CPU
         var ppu: PPU
         var timer: SystemTimer
+        var apu: APU
         var joypad: Joypad
         var workRAM: [UInt8]
         var highRAM: [UInt8]
@@ -313,7 +318,7 @@ public final class GameBoy: EmulatedSystem, Bus {
         guard let cartridge else { throw SystemError.corruptSaveState }
         let snapshot = Snapshot(
             title: cartridge.header.title,
-            cpu: cpu, ppu: ppu, timer: timer, joypad: joypad,
+            cpu: cpu, ppu: ppu, timer: timer, apu: apu, joypad: joypad,
             workRAM: workRAM, highRAM: highRAM, unmappedIO: unmappedIO,
             mapper: cartridge.state, carriedCycles: carriedCycles
         )
@@ -330,6 +335,7 @@ public final class GameBoy: EmulatedSystem, Bus {
         ppu = snapshot.ppu
         timer = snapshot.timer
         joypad = snapshot.joypad
+        apu = snapshot.apu
         workRAM = snapshot.workRAM
         highRAM = snapshot.highRAM
         unmappedIO = snapshot.unmappedIO
