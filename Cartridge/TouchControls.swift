@@ -152,6 +152,11 @@ private struct PressableSurface<Content: View>: View {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }
                     .onEnded { _ in
+                        // A tap fast enough can end without `onChanged` ever
+                        // having run, and then the press was never sent at all.
+                        // The emulator holds every press for a few frames, so
+                        // pressing here and releasing immediately still lands.
+                        if !isDown { emulator.set(button, pressed: true) }
                         isDown = false
                         emulator.set(button, pressed: false)
                     }

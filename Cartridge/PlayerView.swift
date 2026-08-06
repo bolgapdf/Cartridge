@@ -35,7 +35,6 @@ struct PlayerView: View {
         // controls belong in a navigation bar anyway.
         .toolbar(.hidden, for: .navigationBar)
         .persistentSystemOverlays(.hidden)
-        .safeAreaInset(edge: .top) { floatingControls }
         #else
         .toolbar { macToolbar }
         #endif
@@ -56,20 +55,28 @@ struct PlayerView: View {
         if isLandscape {
             HStack(spacing: 0) {
                 TouchControls(emulator: emulator, half: .left)
-                screen
+                screen.frame(maxHeight: .infinity)
                 TouchControls(emulator: emulator, half: .right)
             }
             .ignoresSafeArea(.container, edges: .bottom)
+            // Nowhere else for these to go when the screen owns the full
+            // height, so they take a thin strip off the top.
+            .safeAreaInset(edge: .top) { utilityStrip }
         } else {
+            // The picture goes hard against the top and the pad floats in the
+            // space underneath rather than sitting on the bottom edge — held in
+            // one hand, buttons at the very bottom are a stretch.
             VStack(spacing: 0) {
-                screen
+                screen.frame(maxWidth: .infinity)
+                Spacer(minLength: 0)
                 TouchControls(emulator: emulator, half: .both)
                     .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
+                Spacer(minLength: 0)
+                utilityStrip
             }
         }
         #else
-        screen
+        screen.frame(maxWidth: .infinity, maxHeight: .infinity)
         #endif
     }
 
@@ -86,17 +93,15 @@ struct PlayerView: View {
                 CGFloat(GameBoy.screenSize.width) / CGFloat(GameBoy.screenSize.height),
                 contentMode: .fit
             )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Controls
 
     #if os(iOS)
-    /// A reserved strip rather than an overlay. Floating these over the picture
-    /// looked tidier right up until the pause button landed on the top-right
-    /// corner of the game — and where the picture ends depends on the device,
-    /// so there's no position that's reliably out of the way.
-    private var floatingControls: some View {
+    /// Back, pause and the menu. Small and out of the way — in portrait they
+    /// sit at the very bottom, below the pad, because the top of the screen is
+    /// worth more to the picture than it is to three buttons.
+    private var utilityStrip: some View {
         HStack(spacing: 14) {
             controlButton("chevron.left", label: "Library", action: close)
 

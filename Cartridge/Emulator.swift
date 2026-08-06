@@ -181,8 +181,46 @@ final class Emulator {
 
     // MARK: - Input
 
+    /// How long a button is guaranteed to stay down.
+    ///
+    /// A game reads the joypad port once or twice a frame. A quick tap can be
+    /// pressed and released inside a single frame, and then it never happened —
+    /// which is why tapping did nothing and only holding worked. Four frames is
+    /// far below what anyone can perceive as lag and far above what any game
+    /// can miss.
+    private static let minimumHold: Duration = .milliseconds(70)
+
+    /// Bumped on every press so a delayed release can tell whether the button
+    /// has been pressed again since — otherwise a fast double tap releases the
+    /// second press.
+    private var pressGeneration: [ConsoleButton: Int] = [:]
+    private var pressStarted: [ConsoleButton: ContinuousClock.Instant] = [:]
+
     func set(_ button: ConsoleButton, pressed: Bool) {
-        queue.async { self.core.set(button, pressed: pressed) }
+        if pressed {
+            pressGeneration[button, default: 0] += 1
+            pressStarted[button] = .now
+            queue.async { self.core.set(button, pressed: true) }
+            return
+        }
+
+        let held = pressStarted[button].map { ContinuousClock.now - $0 } ?? Self.minimumHold
+        pressStarted[button] = nil
+
+        // Anything held long enough to have been seen is released immediately.
+        // Padding every release would add lag to the ones that don't need it —
+        // a direction would keep walking after the thumb came off.
+        guard held < Self.minimumHold else {
+            queue.async { self.core.set(button, pressed: false) }
+            return
+        }
+
+        let generation = pressGeneration[button] ?? 0
+        Task { @MainActor in
+            try? await Task.sleep(for: Self.minimumHold - held)
+            guard pressGeneration[button] == generation else { return }
+            queue.async { self.core.set(button, pressed: false) }
+        }
     }
 
     func reset() {
