@@ -19,9 +19,16 @@ import SwiftUI
 struct Thumbstick: View {
     let emulator: Emulator
 
-    /// How far the thumb must move before any direction registers. Without it,
-    /// a thumb resting dead centre jitters between directions on noise alone.
-    private let deadZone: CGFloat = 0.28
+    /// How far the thumb must move before a direction registers, in points —
+    /// not as a fraction of the well.
+    ///
+    /// It was a fraction, which tied sensitivity to how big the stick was drawn
+    /// and meant a deliberate shove to the edge. What matters is only how far a
+    /// thumb has moved, and eight points is about a millimetre and a half.
+    private let activationDistance: CGFloat = 8
+    /// Held directions survive down to here, so easing off slightly mid-stride
+    /// doesn't drop the input.
+    private let releaseDistance: CGFloat = 5
     /// How far past a sector boundary the thumb must travel before the
     /// direction changes. Holding exactly on a boundary otherwise flickers
     /// between two directions several times a second, which reads on screen as
@@ -68,7 +75,9 @@ struct Thumbstick: View {
         let clamped = distance > limit ? limit / distance : 1
         offset = CGSize(width: translation.width * clamped, height: translation.height * clamped)
 
-        guard distance / limit > deadZone else {
+        // Engaging takes more movement than staying engaged.
+        let threshold = held.isEmpty ? activationDistance : releaseDistance
+        guard distance > threshold else {
             sector = nil
             setHeld([])
             return

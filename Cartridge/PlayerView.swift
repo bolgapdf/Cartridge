@@ -185,13 +185,24 @@ struct PlayerView: View {
         }
         .pickerStyle(.menu)
 
-        Picker("Screen", selection: Binding(
-            get: { emulator.palette },
-            set: { emulator.palette = $0 }
-        )) {
-            ForEach(ScreenPalette.all) { Text($0.name).tag($0) }
+        if emulator.entry?.supportsColor == true {
+            Toggle("Game Boy Color", isOn: Binding(
+                get: { emulator.prefersColor },
+                set: { emulator.prefersColor = $0 }
+            ))
         }
-        .pickerStyle(.menu)
+
+        // A monochrome palette has nothing to say about a game choosing its own
+        // colours, so it only appears when one is in use.
+        if !emulator.isColorRunning {
+            Picker("Screen", selection: Binding(
+                get: { emulator.palette },
+                set: { emulator.palette = $0 }
+            )) {
+                ForEach(ScreenPalette.all) { Text($0.name).tag($0) }
+            }
+            .pickerStyle(.menu)
+        }
 
         Toggle("LCD Ghosting", isOn: Binding(
             get: { emulator.ghosting },

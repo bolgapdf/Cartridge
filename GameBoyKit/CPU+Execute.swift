@@ -53,6 +53,7 @@ extension CPU {
                 // reference advances PC by one and lets the following 0x00
                 // execute as a NOP — same net effect, and it matches what the
                 // hardware actually does.
+                stopHandler?()
                 return 3
             case 3:                                         // JR e8
                 let offset = Int8(bitPattern: fetch(bus))

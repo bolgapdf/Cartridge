@@ -63,20 +63,42 @@ struct HardwareTests {
     /// sub-test that broke rather than leaving a wrong picture to interpret.
     static func serialResult(of rom: String, frames: Int) throws -> String {
         let system = try machine(rom)
-        system.run(frames: frames) { $0.serialOutput.contains("Passed")
-            || $0.serialOutput.contains("Failed") }
+        let finished = system.run(frames: frames) {
+            $0.serialOutput.contains("Passed") || $0.serialOutput.contains("Failed")
+        }
+
+        // The verdict arrives a character at a time over several frames, so
+        // stopping the instant "Passed" appears cuts the sentence off mid-word
+        // and "Passed all tests" reads as "Passed ". Sixty more frames lets the
+        // rest of the line land.
+        if finished { system.run(frames: 60) }
         return system.serialOutput
     }
 
-    /// A palette-independent digest of the screen, so that changing the display
-    /// colours can't turn a picture test red.
-    static func screenChecksum(of system: GameBoy) -> UInt64 {
+    /// A digest of the picture that survives a change of palette, of colour
+    /// correction, or of the machine being in colour at all.
+    ///
+    /// Ranks the distinct colours on screen by brightness and hashes those
+    /// ranks, so it describes the picture's structure rather than its exact
+    /// values — which is what a rendering test should be asserting anyway.
+    static func structuralChecksum(of system: GameBoy) -> UInt64 {
+        let pixels = system.framebuffer
+        let ranked = Set(pixels).sorted { luminance($0) > luminance($1) }
+        var rank: [UInt32: UInt8] = [:]
+        for (index, colour) in ranked.enumerated() { rank[colour] = UInt8(index) }
+
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for pixel in system.framebuffer {
-            let shade = UInt8(ScreenPalette.dmg.shades.firstIndex(of: pixel) ?? 0)
-            hash = (hash ^ UInt64(shade)) &* 0x0000_0100_0000_01b3
+        for pixel in pixels {
+            hash = (hash ^ UInt64(rank[pixel] ?? 0)) &* 0x0000_0100_0000_01b3
         }
         return hash
+    }
+
+    private static func luminance(_ colour: UInt32) -> Double {
+        let r = Double((colour >> 16) & 0xFF)
+        let g = Double((colour >> 8) & 0xFF)
+        let b = Double(colour & 0xFF)
+        return 0.299 * r + 0.587 * g + 0.114 * b
     }
 
     // MARK: - CPU
@@ -116,7 +138,40 @@ struct HardwareTests {
     func pictureProcessing() throws {
         let system = try Self.machine("dmg-acid2.gb")
         system.run(frames: 120)
-        #expect(Self.screenChecksum(of: system) == 0xF272_A8FF_E3DB_4C16)
+        #expect(Self.structuralChecksum(of: system) == 0xF272_A8FF_E3DB_4C16)
+    }
+
+    /// cgb-acid2 is the colour hardware's equivalent of dmg-acid2, and covers
+    /// the parts a monochrome test cannot reach: the second VRAM bank, the
+    /// per-tile attribute byte with its palette, bank and flip bits, object
+    /// palettes, and the priority rules — which the Color rearranges rather
+    /// than extends.
+    ///
+    /// Verified against Matt Currie's published reference: 0 of 23,040 pixels
+    /// differed structurally. The two images aren't identical in value, because
+    /// the reference scales the hardware's five bits straight to eight and this
+    /// applies the colour correction a real screen implied.
+    @Test("cgb-acid2 renders exactly")
+    func colorPictureProcessing() throws {
+        let system = try Self.machine("cgb-acid2.gbc")
+        system.run(frames: 200)
+        #expect(system.colorMode, "the cartridge didn't start in Color mode")
+        #expect(Self.structuralChecksum(of: system) == 0xFC38_EAEC_92FD_ECF0)
+    }
+
+    /// The same cartridge, told to stay monochrome. Dual-mode games are meant
+    /// to run either way, and the DMG path has to survive the Color one being
+    /// bolted alongside it.
+    @Test("A Color cartridge still runs in monochrome")
+    func colorCartridgeInMonochrome() throws {
+        let system = try Self.machine("cgb-acid2.gbc")
+        system.prefersColor = false
+        system.run(frames: 200)
+        #expect(!system.colorMode)
+
+        let shades = Set(system.framebuffer)
+        #expect(shades.count <= 4, "\(shades.count) colours on a monochrome screen")
+        #expect(shades.allSatisfy { ScreenPalette.dmg.shades.contains($0) })
     }
 
     // MARK: - Save states
@@ -134,11 +189,11 @@ struct HardwareTests {
 
         let state = try system.saveState()
         system.run(frames: 60)
-        let withoutRestore = Self.screenChecksum(of: system)
+        let withoutRestore = Self.structuralChecksum(of: system)
 
         try system.loadState(state)
         system.run(frames: 60)
-        let afterRestore = Self.screenChecksum(of: system)
+        let afterRestore = Self.structuralChecksum(of: system)
 
         #expect(withoutRestore == afterRestore, "the machine diverged after restoring")
     }
@@ -157,8 +212,9 @@ struct HardwareTests {
     /// The halt bug — `HALT` executed with interrupts disabled and one already
     /// pending, which makes the next byte run twice.
     ///
-    /// This ROM reports on screen rather than over the link, so the assertion is
-    /// a digest of a screen that was read by eye and says "Passed". If it ever
+    /// This ROM declares Color support, so it runs on the Color hardware and
+    /// prints in white on black rather than in green. Its verdict was read by
+    /// eye in that mode and says "Passed"; the assertion is a digest of it. If it ever
     /// fails, render `framebuffer` to a PNG and look at it: the ROM prints a
     /// table of IE/IF/DE values above the verdict, and the wrong row identifies
     /// the case that broke.
@@ -166,6 +222,6 @@ struct HardwareTests {
     func haltBug() throws {
         let system = try Self.machine("halt_bug.gb")
         system.run(frames: 900)
-        #expect(Self.screenChecksum(of: system) == 0xED0D_43F0_501A_9E36)
+        #expect(Self.structuralChecksum(of: system) == 0x9EDE_0ADA_8CE1_8374)
     }
 }

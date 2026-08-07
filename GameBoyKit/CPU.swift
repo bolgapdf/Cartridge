@@ -57,8 +57,20 @@ public final class CPU: Codable {
     public var interruptEnable: UInt8 = 0
     public var interruptFlags: UInt8 = 0
 
+    /// Called when `STOP` executes.
+    ///
+    /// The instruction does nothing on its own, but on a Color it's what
+    /// commits an armed speed switch — and the CPU has no way to know that, so
+    /// the bus supplies the meaning.
+    public var stopHandler: (() -> Void)?
+
     public init(registers: Registers = .afterBoot) {
         self.registers = registers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case registers, ime, imeScheduled, halted, haltBug
+        case interruptEnable, interruptFlags
     }
 
     /// Flags an interrupt as pending. Whether it's taken is up to `IE` and the

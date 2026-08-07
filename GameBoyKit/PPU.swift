@@ -26,8 +26,24 @@ final class PPU: Codable {
     static let linesPerFrame = 154
     static let clocksPerFrame = clocksPerLine * linesPerFrame
 
-    var vram = [UInt8](repeating: 0, count: 0x2000)
+    /// Two 8 KB banks. The Color's second bank holds tile data and, at the map
+    /// addresses, one attribute byte per tile — so the same address means two
+    /// different things depending on which bank is selected.
+    var vram = [UInt8](repeating: 0, count: 0x4000)
+    var vramBank = 0
     var oam = [UInt8](repeating: 0, count: 0xA0)
+
+    /// True when a Color cartridge is running in Color mode. Everything below
+    /// that branches on it is a genuine hardware difference, not a preference.
+    var colorMode = false
+
+    /// Eight background and eight object palettes, four colours each, as the
+    /// raw little-endian 15-bit values the hardware stores.
+    var backgroundPaletteData = [UInt8](repeating: 0xFF, count: 64)
+    var objectPaletteData = [UInt8](repeating: 0xFF, count: 64)
+    /// The auto-incrementing index registers those are written through.
+    var backgroundPaletteIndex: UInt8 = 0
+    var objectPaletteIndex: UInt8 = 0
 
     // MARK: - Registers
 
@@ -66,9 +82,15 @@ final class PPU: Codable {
     /// Background colour indices for the line being drawn, kept because sprite
     /// priority is decided against the index rather than the final colour.
     private var backgroundIndices = [UInt8](repeating: 0, count: width)
+    /// Per-pixel "this background tile wins over sprites", which on the Color
+    /// is a property of the tile rather than of the sprite.
+    private var backgroundPriority = [Bool](repeating: false, count: width)
 
     /// Set for one step when a frame finished, so the shell knows to present.
     private(set) var frameCompleted = false
+    /// Set for one step on entering horizontal blank, which is the only window
+    /// the Color's line-by-line VRAM transfer is allowed to move bytes in.
+    private(set) var enteredHBlank = false
 
     /// Everything a save state needs. The two framebuffers and the scanline's
     /// background indices are deliberately absent: they're 185 KB between them
@@ -77,6 +99,34 @@ final class PPU: Codable {
         case vram, oam, control, statusFlags, scrollY, scrollX, line, lineCompare
         case backgroundPalette, objectPalette0, objectPalette1, windowY, windowX
         case clock, mode, windowLine, statLine, palette, ghosting
+        case vramBank, colorMode, backgroundPaletteData, objectPaletteData
+        case backgroundPaletteIndex, objectPaletteIndex
+    }
+
+    // MARK: - Colour
+
+    /// Unpacks one of the stored 15-bit colours into a screen pixel.
+    ///
+    /// The hardware packs five bits per channel little-endian as BGR — not RGB,
+    /// which is the first thing to get wrong.
+    private func colour(_ data: [UInt8], palette: Int, index: Int) -> UInt32 {
+        let offset = palette * 8 + index * 2
+        let packed = UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
+
+        let red = Int(packed & 0x1F)
+        let green = Int((packed >> 5) & 0x1F)
+        let blue = Int((packed >> 10) & 0x1F)
+
+        // Scaled rather than shifted. The Color's screen was dim and its
+        // primaries bled into one another, so treating the five bits as
+        // straight eight-bit colour comes out lurid — greens especially. This
+        // is the correction the community settled on, and it's why screenshots
+        // from real hardware look muted next to a naive emulator's.
+        let r = min(255, (red * 13 + green * 2 + blue) >> 1)
+        let g = min(255, (green * 3 + blue) << 1)
+        let b = min(255, (red * 3 + green * 2 + blue * 11) >> 1)
+
+        return 0xFF00_0000 | UInt32(r) << 16 | UInt32(g) << 8 | UInt32(b)
     }
 
     /// What the four shades look like. The hardware produces two bits per
@@ -108,6 +158,7 @@ final class PPU: Codable {
     /// Advances the beam and returns the interrupts raised, as an `IF` mask.
     func step(_ cycles: Int) -> UInt8 {
         frameCompleted = false
+        enteredHBlank = false
 
         guard enabled else {
             // Switching the LCD off resets the beam to the top of the screen.
@@ -163,6 +214,7 @@ final class PPU: Codable {
             case 0:
                 // Drawing has finished, so the line is now settled.
                 renderLine()
+                enteredHBlank = true
             case 1:
                 // Entering VBlank completes the frame.
                 swap(&frontBuffer, &backBuffer)
@@ -210,7 +262,11 @@ final class PPU: Codable {
         let y = Int(line)
         guard y < Self.height else { return }
 
-        if control & 0x01 != 0 {
+        // On the Color, bit 0 stops meaning "background off" and starts
+        // meaning "background loses priority to sprites" — the tiles are still
+        // drawn. Blanking here would erase the picture of every Color game that
+        // uses it.
+        if control & 0x01 != 0 || colorMode {
             renderBackground(y)
         } else {
             // Bit 0 blanks the background entirely, and blanks it to colour 0
@@ -219,6 +275,7 @@ final class PPU: Codable {
             for x in 0..<Self.width {
                 backBuffer[start + x] = palette.shades[0]
                 backgroundIndices[x] = 0
+                backgroundPriority[x] = false
             }
         }
 
@@ -254,19 +311,32 @@ final class PPU: Codable {
                 tileY = (y + Int(scrollY)) & 0xFF
             }
 
-            let index = vram[map + (tileY >> 3) * 32 + (tileX >> 3)]
+            let mapAddress = map + (tileY >> 3) * 32 + (tileX >> 3)
+            let index = vram[mapAddress]
+            // The attribute lives at the same address in the other bank.
+            let attributes = colorMode ? vram[0x2000 + mapAddress] : 0
+
+            var pixelRow = tileY & 7
+            var pixelColumn = tileX & 7
+            if attributes & 0x40 != 0 { pixelRow = 7 - pixelRow }
+            if attributes & 0x20 != 0 { pixelColumn = 7 - pixelColumn }
+
             let tile = signedIndices
                 ? 0x1000 + Int(Int8(bitPattern: index)) * 16
                 : Int(index) * 16
-
-            let row = tile + (tileY & 7) * 2
-            let bit = UInt8(7 - (tileX & 7))
+            let bank = (attributes & 0x08) != 0 ? 0x2000 : 0
+            let row = bank + tile + pixelRow * 2
+            let bit = UInt8(7 - pixelColumn)
             // Two bitplanes, one byte each, with the two bits of a pixel split
             // across them at the same position.
-            let colour = ((vram[row + 1] >> bit) & 1) << 1 | ((vram[row] >> bit) & 1)
+            let colourIndex = ((vram[row + 1] >> bit) & 1) << 1 | ((vram[row] >> bit) & 1)
 
-            backgroundIndices[x] = colour
-            backBuffer[rowStart + x] = shade(colour, through: backgroundPalette)
+            backgroundIndices[x] = colourIndex
+            backgroundPriority[x] = colorMode && attributes & 0x80 != 0
+
+            backBuffer[rowStart + x] = colorMode
+                ? colour(backgroundPaletteData, palette: Int(attributes & 0x07), index: Int(colourIndex))
+                : shade(colourIndex, through: backgroundPalette)
         }
 
         if windowDrawn { windowLine += 1 }
@@ -289,9 +359,15 @@ final class PPU: Codable {
         }
 
         // On the monochrome hardware the leftmost sprite wins, with OAM order
-        // breaking ties. Drawing lowest-priority first and letting the rest
-        // paint over it gets the same result as an explicit priority test.
-        visible.sort { $0.x != $1.x ? $0.x > $1.x : $0.oamIndex > $1.oamIndex }
+        // breaking ties. The Color drops the X rule entirely and goes by OAM
+        // position alone, so the same scene can layer differently on the two
+        // machines. Drawing lowest-priority first and letting the rest paint
+        // over it gets the same result as an explicit priority test.
+        if colorMode {
+            visible.sort { $0.oamIndex > $1.oamIndex }
+        } else {
+            visible.sort { $0.x != $1.x ? $0.x > $1.x : $0.oamIndex > $1.oamIndex }
+        }
 
         let rowStart = y * Self.width
 
@@ -307,10 +383,14 @@ final class PPU: Codable {
             var row = y - top
             if attributes & 0x40 != 0 { row = spriteHeight - 1 - row }
 
-            let address = tile * 16 + row * 2
+            // Bit 3 selects the VRAM bank on the Color; on a DMG it isn't
+            // connected to anything.
+            let bank = (colorMode && attributes & 0x08 != 0) ? 0x2000 : 0
+            let address = bank + tile * 16 + row * 2
             let low = vram[address]
             let high = vram[address + 1]
-            let palette = attributes & 0x10 != 0 ? objectPalette1 : objectPalette0
+            let monoPalette = attributes & 0x10 != 0 ? objectPalette1 : objectPalette0
+            let colorPalette = Int(attributes & 0x07)
             let behindBackground = attributes & 0x80 != 0
             let flipX = attributes & 0x20 != 0
 
@@ -319,13 +399,27 @@ final class PPU: Codable {
                 guard x >= 0 && x < Self.width else { continue }
 
                 let bit = UInt8(flipX ? pixel : 7 - pixel)
-                let colour = ((high >> bit) & 1) << 1 | ((low >> bit) & 1)
+                let colourIndex = ((high >> bit) & 1) << 1 | ((low >> bit) & 1)
                 // Colour 0 is transparent for sprites — which is why sprite
                 // palettes only ever define three usable shades.
-                guard colour != 0 else { continue }
-                if behindBackground && backgroundIndices[x] != 0 { continue }
+                guard colourIndex != 0 else { continue }
 
-                backBuffer[rowStart + x] = shade(colour, through: palette)
+                if colorMode {
+                    // Three-way on the Color. LCDC bit 0 is a master override:
+                    // clear, and sprites win over everything regardless of what
+                    // either the tile or the sprite asked for. Otherwise either
+                    // one can claim priority.
+                    if control & 0x01 != 0 {
+                        let blocked = backgroundPriority[x] || behindBackground
+                        if blocked && backgroundIndices[x] != 0 { continue }
+                    }
+                    backBuffer[rowStart + x] = colour(
+                        objectPaletteData, palette: colorPalette, index: Int(colourIndex)
+                    )
+                } else {
+                    if behindBackground && backgroundIndices[x] != 0 { continue }
+                    backBuffer[rowStart + x] = shade(colourIndex, through: monoPalette)
+                }
             }
         }
     }

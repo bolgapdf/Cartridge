@@ -42,6 +42,7 @@ final class Emulator {
         self.library = library
         palette = .named(UserDefaults.standard.string(forKey: "palette") ?? "dmg")
         ghosting = UserDefaults.standard.bool(forKey: "ghosting")
+        prefersColor = UserDefaults.standard.object(forKey: "prefersColor") as? Bool ?? true
         observeTermination()
     }
 
@@ -64,14 +65,6 @@ final class Emulator {
     var speed: Speed = .normal { didSet { restartClock() } }
     /// Held rather than toggled — the fast-forward button in the UI.
     var isBoosting = false { didSet { restartClock() } }
-    /// Also held. Nothing is emulated while this is on; frames are restored
-    /// from the ring below, newest first.
-    var isRewinding = false { didSet { rewindRequested = isRewinding } }
-    /// The queue's copy. Reading the main-actor property from the emulation
-    /// queue would be a cross-actor access on every frame; a stale read here
-    /// costs one frame on a control that's held for a second.
-    nonisolated(unsafe) private var rewindRequested = false
-
     var palette: ScreenPalette = .dmg {
         didSet {
             queue.async { self.core.palette = self.palette }
@@ -86,19 +79,22 @@ final class Emulator {
         }
     }
 
-    /// How much history rewind can reach back through.
+    /// Whether a Color cartridge wakes the Color hardware.
     ///
-    /// A state is taken every fourth frame, so rewinding — which restores one
-    /// per displayed frame — runs backwards at four times speed. That's how
-    /// rewind is meant to feel: you overshoot, let go, and play forward again.
-    private static let snapshotInterval = 4
-    private static let rewindSeconds = 20.0
-
-    private var rewindBuffer: [Data] = []
-    private var framesSinceSnapshot = 0
-    private var rewindCapacity: Int {
-        Int(GameBoy.frameRate * Self.rewindSeconds) / Self.snapshotInterval
+    /// Dual-mode games run either way, so this is a real choice — Silver in
+    /// green is how most people first played it. Changing it is a power cycle,
+    /// which is why the game is reloaded rather than patched underneath.
+    var prefersColor = true {
+        didSet {
+            UserDefaults.standard.set(prefersColor, forKey: "prefersColor")
+            guard let entry else { return }
+            play(entry, romURL: library.romURL(for: entry))
+        }
     }
+
+    /// True when the running game is actually using the Color hardware, which
+    /// is what decides whether a monochrome palette means anything.
+    private(set) var isColorRunning = false
 
     /// The last several seconds of picture, for saving a clip.
     nonisolated(unsafe) private let clipRecorder = ClipRecorder()
@@ -134,15 +130,19 @@ final class Emulator {
             let data = try Data(contentsOf: url)
             stop()
 
-            try queue.sync { try core.insert(cartridge: data) }
+            try queue.sync {
+                // Set before insertion: which machine the cartridge boots on is
+                // decided at power-on, not afterwards.
+                core.prefersColor = prefersColor
+                try core.insert(cartridge: data)
+            }
+            isColorRunning = queue.sync { core.colorMode }
 
             self.entry = entry
             title = entry.title
             subtitle = entry.subtitle
             errorMessage = nil
 
-            rewindBuffer.removeAll(keepingCapacity: true)
-            framesSinceSnapshot = 0
             clipRecorder.reset()
             queue.sync {
                 core.palette = palette
@@ -221,14 +221,9 @@ final class Emulator {
         timer.setEventHandler { [weak self] in
             guard let self else { return }
 
-            if self.rewindRequested {
-                self.stepBackwards()
-            } else {
-                for _ in 0..<framesPerTick {
-                    self.core.runFrame()
-                    self.audio.enqueue(self.core.drainAudio())
-                    self.recordHistory()
-                }
+            for _ in 0..<framesPerTick {
+                self.core.runFrame()
+                self.audio.enqueue(self.core.drainAudio())
             }
 
             // Only the finished frame crosses back to the main actor; the core
@@ -239,30 +234,6 @@ final class Emulator {
         }
         timer.resume()
         clock = timer
-    }
-
-    // MARK: - Rewind
-
-    private func recordHistory() {
-        framesSinceSnapshot += 1
-        guard framesSinceSnapshot >= Self.snapshotInterval else { return }
-        framesSinceSnapshot = 0
-
-        guard let state = try? core.saveState() else { return }
-        rewindBuffer.append(state)
-        if rewindBuffer.count > rewindCapacity {
-            rewindBuffer.removeFirst(rewindBuffer.count - rewindCapacity)
-        }
-    }
-
-    private func stepBackwards() {
-        // The newest state is the one currently on screen, so the first pop is
-        // discarded — otherwise holding rewind would sit on the present frame.
-        guard let state = rewindBuffer.popLast() else { return }
-        try? core.loadState(state)
-        // Audio produced while scrubbing is meaningless and would otherwise
-        // pile up in the ring buffer.
-        _ = core.drainAudio()
     }
 
     // MARK: - Input

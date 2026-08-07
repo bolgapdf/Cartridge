@@ -29,7 +29,25 @@ public final class GameBoy: EmulatedSystem, Bus {
     var apu = APU()
     private var cartridge: GameCartridge?
 
-    private var workRAM = [UInt8](repeating: 0, count: 0x2000)
+    /// Eight 4 KB banks on the Color, of which a DMG only ever sees the first
+    /// two. The low half is always bank 0; the high half is switchable.
+    private var workRAM = [UInt8](repeating: 0, count: 0x8000)
+    private var workRAMBank = 1
+
+    /// True when a Color cartridge is running with the Color hardware awake.
+    public private(set) var colorMode = false
+
+    /// The Color can run its CPU at twice the clock. The video and sound
+    /// hardware do not follow — which is the entire point, since the extra
+    /// speed exists to give games more time between scanlines.
+    private var doubleSpeed = false
+    private var speedSwitchArmed = false
+
+    /// Source, destination and remaining length of a VRAM transfer.
+    private var hdmaSource: UInt16 = 0
+    private var hdmaDestination: UInt16 = 0
+    private var hdmaRemaining = 0
+    private var hdmaActive = false
     private var highRAM = [UInt8](repeating: 0, count: 0x7F)
     /// Registers this core doesn't model. Storing the writes lets a game read
     /// back what it wrote, which is all most of them check for.
@@ -64,6 +82,13 @@ public final class GameBoy: EmulatedSystem, Bus {
         reset()
     }
 
+    /// Whether to wake the Color hardware for a cartridge that supports it.
+    ///
+    /// Dual-mode cartridges — Pokémon Silver among them — run either way, so
+    /// this is a real choice rather than a detection. Off, you get the game as
+    /// it looked on a 1989 Game Boy.
+    public var prefersColor = true { didSet { reset() } }
+
     public var header: GameCartridge.Header? { cartridge?.header }
 
     /// Puts the machine into the state the boot ROM leaves it in.
@@ -71,15 +96,31 @@ public final class GameBoy: EmulatedSystem, Bus {
     /// The boot ROM itself isn't included — it's 256 copyrighted bytes, and the
     /// only thing lost by starting after it is the scrolling logo.
     public func reset() {
-        cpu = CPU()
+        colorMode = (cartridge?.header.supportsColor ?? false) && prefersColor
+        // The boot ROM leaves 0x11 in A on a Color, and games read it to decide
+        // which mode to configure themselves for.
+        cpu = CPU(registers: colorMode ? .afterColorBoot : .afterBoot)
         ppu = PPU()
+        ppu.colorMode = colorMode
+        cpu.stopHandler = { [weak self] in self?.switchSpeed() }
         timer = SystemTimer()
         joypad = Joypad()
         apu = APU()
-        workRAM = [UInt8](repeating: 0, count: 0x2000)
+        workRAM = [UInt8](repeating: 0, count: 0x8000)
+        workRAMBank = 1
         highRAM = [UInt8](repeating: 0, count: 0x7F)
         serialOutput = ""
         carriedCycles = 0
+        doubleSpeed = false
+        speedSwitchArmed = false
+        hdmaActive = false
+    }
+
+    /// `STOP` with the switch armed is how a Color game changes gear.
+    private func switchSpeed() {
+        guard colorMode, speedSwitchArmed else { return }
+        speedSwitchArmed = false
+        doubleSpeed.toggle()
     }
 
     // MARK: - Running
@@ -95,19 +136,34 @@ public final class GameBoy: EmulatedSystem, Bus {
             accessCycles = 0
             let clocks = cpu.step(self) * 4
             advance(clocks - accessCycles)
-            carriedCycles -= clocks
+            // The frame budget is in video clocks. At double speed the CPU gets
+            // through twice as many of its own for the same picture, which is
+            // the entire point of the mode.
+            carriedCycles -= doubleSpeed ? clocks / 2 : clocks
         }
     }
 
     /// Runs the other chips forward by `clocks`.
     private func advance(_ clocks: Int) {
         guard clocks > 0 else { return }
+
+        // The divider runs off the CPU clock, so it doubles along with it.
         if timer.step(clocks) { cpu.request(.timer) }
-        cpu.interruptFlags |= ppu.step(clocks)
+
+        // The video and sound hardware do not. They see half as many clocks per
+        // CPU cycle at double speed, which is what gives a game more processing
+        // time per scanline rather than a faster game.
+        let videoClocks = doubleSpeed ? clocks / 2 : clocks
+        cpu.interruptFlags |= ppu.step(videoClocks)
+        if ppu.enteredHBlank { stepHDMA() }
+
         // The sound hardware's frame sequencer is driven by a bit of the
         // divider rather than by a counter of its own, so it's read here after
-        // the timer has advanced.
-        apu.step(clocks, dividerBit: timer.counter & 0x1000 != 0)
+        // the timer has advanced. At double speed it moves up one bit, so the
+        // sequencer keeps running at 512 Hz while the divider underneath it
+        // runs at twice the rate.
+        let dividerBit: UInt16 = doubleSpeed ? 0x2000 : 0x1000
+        apu.step(videoClocks, dividerBit: timer.counter & dividerBit != 0)
     }
 
     /// One M-cycle, charged to the bus access that caused it.
@@ -165,16 +221,14 @@ public final class GameBoy: EmulatedSystem, Bus {
         case 0x0000...0x7FFF:
             return cartridge?.read(address) ?? 0xFF
         case 0x8000...0x9FFF:
-            return ppu.vram[Int(address & 0x1FFF)]
+            return ppu.vram[ppu.vramBank * 0x2000 + Int(address & 0x1FFF)]
         case 0xA000...0xBFFF:
             return cartridge?.readRAM(address) ?? 0xFF
-        case 0xC000...0xDFFF:
-            return workRAM[Int(address & 0x1FFF)]
-        case 0xE000...0xFDFF:
-            // Echo RAM: the address decoder simply doesn't check bit 13, so
-            // this range is the same chip seen twice. Documented as prohibited,
-            // and used anyway by a few games.
-            return workRAM[Int(address & 0x1FFF)]
+        case 0xC000...0xDFFF, 0xE000...0xFDFF:
+            // Echo RAM shares the decode: the address decoder simply doesn't
+            // check bit 13, so 0xE000 upward is the same chip seen twice.
+            // Documented as prohibited, and used anyway by a few games.
+            return workRAM[workRAMOffset(address)]
         case 0xFE00...0xFE9F:
             return ppu.oam[Int(address - 0xFE00)]
         case 0xFEA0...0xFEFF:
@@ -195,11 +249,11 @@ public final class GameBoy: EmulatedSystem, Bus {
         case 0x0000...0x7FFF:
             cartridge?.writeControl(address, value)
         case 0x8000...0x9FFF:
-            ppu.vram[Int(address & 0x1FFF)] = value
+            ppu.vram[ppu.vramBank * 0x2000 + Int(address & 0x1FFF)] = value
         case 0xA000...0xBFFF:
             cartridge?.writeRAM(address, value)
         case 0xC000...0xDFFF, 0xE000...0xFDFF:
-            workRAM[Int(address & 0x1FFF)] = value
+            workRAM[workRAMOffset(address)] = value
         case 0xFE00...0xFE9F:
             ppu.oam[Int(address - 0xFE00)] = value
         case 0xFEA0...0xFEFF:
@@ -211,6 +265,14 @@ public final class GameBoy: EmulatedSystem, Bus {
         default:
             cpu.interruptEnable = value
         }
+    }
+
+    /// The low half is fixed to bank 0; the high half follows SVBK, where a
+    /// written 0 means bank 1.
+    @inline(__always)
+    private func workRAMOffset(_ address: UInt16) -> Int {
+        let offset = Int(address & 0x0FFF)
+        return address & 0x1000 == 0 ? offset : workRAMBank * 0x1000 + offset
     }
 
     // MARK: - Hardware registers
@@ -239,6 +301,17 @@ public final class GameBoy: EmulatedSystem, Bus {
         case 0xFF49: ppu.objectPalette1
         case 0xFF4A: ppu.windowY
         case 0xFF4B: ppu.windowX
+        // Everything below only exists on the Color, and reads as 0xFF on a
+        // DMG — which is how a dual-mode game detects which machine it's on.
+        case 0xFF4D: colorMode ? (doubleSpeed ? 0x80 : 0x00) | (speedSwitchArmed ? 0x01 : 0) | 0x7E : 0xFF
+        case 0xFF4F: colorMode ? UInt8(ppu.vramBank) | 0xFE : 0xFF
+        case 0xFF51...0xFF54: 0xFF
+        case 0xFF55: colorMode ? hdmaStatus : 0xFF
+        case 0xFF68: colorMode ? ppu.backgroundPaletteIndex | 0x40 : 0xFF
+        case 0xFF69: colorMode ? ppu.backgroundPaletteData[Int(ppu.backgroundPaletteIndex & 0x3F)] : 0xFF
+        case 0xFF6A: colorMode ? ppu.objectPaletteIndex | 0x40 : 0xFF
+        case 0xFF6B: colorMode ? ppu.objectPaletteData[Int(ppu.objectPaletteIndex & 0x3F)] : 0xFF
+        case 0xFF70: colorMode ? UInt8(workRAMBank) | 0xF8 : 0xFF
         default: unmappedIO[Int(address & 0x7F)]
         }
     }
@@ -268,8 +341,90 @@ public final class GameBoy: EmulatedSystem, Bus {
         case 0xFF49: ppu.objectPalette1 = value
         case 0xFF4A: ppu.windowY = value
         case 0xFF4B: ppu.windowX = value
+        case 0xFF4D:
+            if colorMode { speedSwitchArmed = value & 0x01 != 0 }
+        case 0xFF4F:
+            if colorMode { ppu.vramBank = Int(value & 0x01) }
+        case 0xFF51: hdmaSource = (hdmaSource & 0x00FF) | (UInt16(value) << 8)
+        case 0xFF52: hdmaSource = (hdmaSource & 0xFF00) | UInt16(value & 0xF0)
+        case 0xFF53: hdmaDestination = (hdmaDestination & 0x00FF) | (UInt16(value & 0x1F) << 8)
+        case 0xFF54: hdmaDestination = (hdmaDestination & 0xFF00) | UInt16(value & 0xF0)
+        case 0xFF55:
+            if colorMode { startHDMA(value) }
+        case 0xFF68:
+            if colorMode { ppu.backgroundPaletteIndex = value }
+        case 0xFF69:
+            if colorMode { writePalette(&ppu.backgroundPaletteData, &ppu.backgroundPaletteIndex, value) }
+        case 0xFF6A:
+            if colorMode { ppu.objectPaletteIndex = value }
+        case 0xFF6B:
+            if colorMode { writePalette(&ppu.objectPaletteData, &ppu.objectPaletteIndex, value) }
+        case 0xFF70:
+            // Bank 0 isn't selectable in the high half; writing 0 gets bank 1.
+            if colorMode { workRAMBank = max(Int(value & 0x07), 1) }
         default: unmappedIO[Int(address & 0x7F)] = value
         }
+    }
+
+    /// Palette memory is written a byte at a time through a moving index, and
+    /// bit 7 of the index register makes it step on its own — so a game can
+    /// blast all 64 bytes without touching the index again.
+    private func writePalette(_ data: inout [UInt8], _ index: inout UInt8, _ value: UInt8) {
+        data[Int(index & 0x3F)] = value
+        if index & 0x80 != 0 {
+            index = (index & 0x80) | ((index &+ 1) & 0x3F)
+        }
+    }
+
+    // MARK: - VRAM transfer
+
+    private var hdmaStatus: UInt8 {
+        // Bit 7 set means "no transfer running", which is the opposite of what
+        // it looks like.
+        hdmaActive ? UInt8((hdmaRemaining / 16) - 1) : 0xFF
+    }
+
+    private func startHDMA(_ value: UInt8) {
+        let length = (Int(value & 0x7F) + 1) * 16
+
+        guard value & 0x80 != 0 else {
+            if hdmaActive {
+                // Writing with bit 7 clear during a transfer cancels it rather
+                // than starting a new one.
+                hdmaActive = false
+                return
+            }
+            // General purpose: the whole block at once, with the CPU halted.
+            // Done instantly here; the cost is that a game timing one against
+            // the scanline counter would see it finish early.
+            copyHDMA(bytes: length)
+            hdmaRemaining = 0
+            return
+        }
+
+        hdmaRemaining = length
+        hdmaActive = true
+    }
+
+    /// The horizontal-blank variant moves sixteen bytes per line, which is the
+    /// only way to push a whole screen of new tiles in during a frame — and the
+    /// reason Color games can scroll layered backgrounds a DMG could not.
+    private func stepHDMA() {
+        guard hdmaActive else { return }
+        copyHDMA(bytes: 16)
+        hdmaRemaining -= 16
+        if hdmaRemaining <= 0 { hdmaActive = false }
+    }
+
+    private func copyHDMA(bytes: Int) {
+        suppressTiming = true
+        for _ in 0..<bytes {
+            let value = read(hdmaSource)
+            ppu.vram[ppu.vramBank * 0x2000 + Int(hdmaDestination & 0x1FFF)] = value
+            hdmaSource &+= 1
+            hdmaDestination &+= 1
+        }
+        suppressTiming = false
     }
 
     /// Sprite attributes are copied wholesale rather than written one byte at a
@@ -325,6 +480,18 @@ public final class GameBoy: EmulatedSystem, Bus {
         var unmappedIO: Data
         var mapper: MapperState
         var carriedCycles: Int
+
+        // The Color's additions. Leaving these out is invisible in a screenshot
+        // taken straight after a restore and obvious a second later, when the
+        // game reads back a work RAM bank it never selected.
+        var colorMode: Bool
+        var workRAMBank: Int
+        var doubleSpeed: Bool
+        var speedSwitchArmed: Bool
+        var hdmaSource: UInt16
+        var hdmaDestination: UInt16
+        var hdmaRemaining: Int
+        var hdmaActive: Bool
     }
 
     /// Binary rather than JSON, and compressed.
@@ -339,7 +506,11 @@ public final class GameBoy: EmulatedSystem, Bus {
             title: cartridge.header.title,
             cpu: cpu, ppu: ppu, timer: timer, apu: apu, joypad: joypad,
             workRAM: Data(workRAM), highRAM: Data(highRAM), unmappedIO: Data(unmappedIO),
-            mapper: cartridge.state, carriedCycles: carriedCycles
+            mapper: cartridge.state, carriedCycles: carriedCycles,
+            colorMode: colorMode, workRAMBank: workRAMBank,
+            doubleSpeed: doubleSpeed, speedSwitchArmed: speedSwitchArmed,
+            hdmaSource: hdmaSource, hdmaDestination: hdmaDestination,
+            hdmaRemaining: hdmaRemaining, hdmaActive: hdmaActive
         )
 
         let encoder = PropertyListEncoder()
@@ -368,5 +539,18 @@ public final class GameBoy: EmulatedSystem, Bus {
         unmappedIO = [UInt8](snapshot.unmappedIO)
         cartridge.state = snapshot.mapper
         carriedCycles = snapshot.carriedCycles
+
+        colorMode = snapshot.colorMode
+        workRAMBank = snapshot.workRAMBank
+        doubleSpeed = snapshot.doubleSpeed
+        speedSwitchArmed = snapshot.speedSwitchArmed
+        hdmaSource = snapshot.hdmaSource
+        hdmaDestination = snapshot.hdmaDestination
+        hdmaRemaining = snapshot.hdmaRemaining
+        hdmaActive = snapshot.hdmaActive
+
+        // The decoded CPU is a fresh object, so the hook the bus installed on
+        // the old one doesn't come with it.
+        cpu.stopHandler = { [weak self] in self?.switchSpeed() }
     }
 }

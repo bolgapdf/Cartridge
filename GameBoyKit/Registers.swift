@@ -110,6 +110,23 @@ public struct Registers: Equatable, Sendable, Codable {
         registers.pc = 0x0100
         return registers
     }
+
+    /// State after the Color's boot ROM hands over.
+    ///
+    /// The one that matters is A holding 0x11. Dual-mode cartridges read it on
+    /// the first instruction to decide whether to set up colour palettes or
+    /// stay monochrome, so getting it wrong doesn't produce wrong colours — it
+    /// produces a game that never tries.
+    public static var afterColorBoot: Registers {
+        var registers = Registers()
+        registers.af = 0x1180
+        registers.bc = 0x0000
+        registers.de = 0xFF56
+        registers.hl = 0x000D
+        registers.sp = 0xFFFE
+        registers.pc = 0x0100
+        return registers
+    }
 }
 
 extension Registers: CustomStringConvertible {
