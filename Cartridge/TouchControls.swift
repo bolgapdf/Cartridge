@@ -6,29 +6,13 @@
 #if os(iOS)
 import SwiftUI
 
-/// The colours the hardware used.
-///
-/// The DMG's buttons weren't grey — the d-pad was near-black, A and B were a
-/// deep magenta, and start and select were pale slabs set at an angle. Matching
-/// that is worth more than any amount of neutral styling: it makes the controls
-/// legible at a glance, because the shapes and colours already mean something.
-private enum ControlStyle {
-    static let pad = Color(red: 0.13, green: 0.13, blue: 0.15)
-    static let padPressed = Color(red: 0.26, green: 0.26, blue: 0.30)
-    static let face = Color(red: 0.60, green: 0.13, blue: 0.32)
-    static let facePressed = Color(red: 0.76, green: 0.20, blue: 0.42)
-    static let pill = Color(red: 0.42, green: 0.42, blue: 0.47)
-    static let pillPressed = Color(red: 0.58, green: 0.58, blue: 0.63)
-    static let well = Color(red: 0.09, green: 0.09, blue: 0.11)
-
-    /// A highlight along the top edge and a shadow underneath, which is all it
-    /// takes to read as a physical button rather than a coloured rectangle.
-    static func relief(_ pressed: Bool) -> LinearGradient {
-        LinearGradient(
-            colors: [.white.opacity(pressed ? 0.04 : 0.22), .clear, .black.opacity(0.22)],
-            startPoint: .top, endPoint: .bottom
-        )
-    }
+/// A highlight along the top edge and a shadow underneath, which is all it
+/// takes to read as a physical button rather than a coloured rectangle.
+private func relief(_ pressed: Bool) -> LinearGradient {
+    LinearGradient(
+        colors: [.white.opacity(pressed ? 0.04 : 0.22), .clear, .black.opacity(0.22)],
+        startPoint: .top, endPoint: .bottom
+    )
 }
 
 /// On-screen controls, laid out the way the hardware was.
@@ -45,13 +29,14 @@ struct TouchControls: View {
     /// A stick or the original cross. Some games — anything needing a single
     /// exact direction, like a menu — are easier on the cross, so both stay.
     @AppStorage("useThumbstick") private var useThumbstick = true
+    @ThemeSetting private var theme
 
     @ViewBuilder
     private var directions: some View {
         if useThumbstick {
             Thumbstick(emulator: emulator)
         } else {
-            DirectionalPad(emulator: emulator)
+            DirectionalPad(emulator: emulator, theme: theme.buttons)
         }
     }
 
@@ -63,9 +48,9 @@ struct TouchControls: View {
 
         case .right:
             VStack(spacing: 18) {
-                FaceButtons(emulator: emulator)
-                PillButton(title: "START", button: .start, emulator: emulator)
-                PillButton(title: "SELECT", button: .select, emulator: emulator)
+                FaceButtons(emulator: emulator, theme: theme.buttons)
+                PillButton(title: "START", button: .start, emulator: emulator, theme: theme.buttons)
+                PillButton(title: "SELECT", button: .select, emulator: emulator, theme: theme.buttons)
             }
             .padding(.horizontal, 18)
 
@@ -74,11 +59,11 @@ struct TouchControls: View {
                 HStack(alignment: .center) {
                     directions
                     Spacer(minLength: 24)
-                    FaceButtons(emulator: emulator)
+                    FaceButtons(emulator: emulator, theme: theme.buttons)
                 }
                 HStack(spacing: 28) {
-                    PillButton(title: "SELECT", button: .select, emulator: emulator)
-                    PillButton(title: "START", button: .start, emulator: emulator)
+                    PillButton(title: "SELECT", button: .select, emulator: emulator, theme: theme.buttons)
+                    PillButton(title: "START", button: .start, emulator: emulator, theme: theme.buttons)
                 }
             }
             .padding(.vertical, 12)
@@ -90,6 +75,7 @@ struct TouchControls: View {
 
 private struct DirectionalPad: View {
     let emulator: Emulator
+    let theme: ButtonTheme
     private let size: CGFloat = 52
 
     var body: some View {
@@ -98,7 +84,7 @@ private struct DirectionalPad: View {
             HStack(spacing: 0) {
                 arm(.left, "chevron.left")
                 ZStack {
-                    Rectangle().fill(ControlStyle.pad)
+                    Rectangle().fill(theme.pad)
                     Circle()
                         .fill(.black.opacity(0.25))
                         .frame(width: 14, height: 14)
@@ -114,8 +100,8 @@ private struct DirectionalPad: View {
     private func arm(_ button: ConsoleButton, _ symbol: String) -> some View {
         PressableSurface(button: button, emulator: emulator) { isDown in
             ZStack {
-                Rectangle().fill(isDown ? ControlStyle.padPressed : ControlStyle.pad)
-                ControlStyle.relief(isDown)
+                Rectangle().fill(isDown ? theme.padPressed : theme.pad)
+                relief(isDown)
                 Image(systemName: symbol)
                     .font(.system(size: 14, weight: .heavy))
                     .foregroundStyle(.white.opacity(0.5))
@@ -127,6 +113,7 @@ private struct DirectionalPad: View {
 
 private struct FaceButtons: View {
     let emulator: Emulator
+    let theme: ButtonTheme
 
     var body: some View {
         // Offset, because A and B sit on a diagonal rather than side by side.
@@ -139,12 +126,12 @@ private struct FaceButtons: View {
     private func round(_ button: ConsoleButton, _ label: String) -> some View {
         PressableSurface(button: button, emulator: emulator) { isDown in
             ZStack {
-                Circle().fill(isDown ? ControlStyle.facePressed : ControlStyle.face)
-                Circle().fill(ControlStyle.relief(isDown))
+                Circle().fill(isDown ? theme.facePressed : theme.face)
+                Circle().fill(relief(isDown))
                 Circle().strokeBorder(.black.opacity(0.28), lineWidth: 1)
                 Text(label)
                     .font(.system(size: 21, weight: .heavy, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .foregroundStyle(theme.label)
             }
             .frame(width: 64, height: 64)
             .shadow(color: .black.opacity(0.45), radius: isDown ? 1 : 4, y: isDown ? 0 : 2)
@@ -156,19 +143,20 @@ private struct PillButton: View {
     let title: String
     let button: ConsoleButton
     let emulator: Emulator
+    let theme: ButtonTheme
 
     var body: some View {
         PressableSurface(button: button, emulator: emulator) { isDown in
             Text(title)
                 .font(.system(size: 10, weight: .heavy, design: .rounded))
                 .kerning(0.6)
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(theme.label)
                 .padding(.horizontal, 17)
                 .padding(.vertical, 8)
                 .background {
                     Capsule()
-                        .fill(isDown ? ControlStyle.pillPressed : ControlStyle.pill)
-                        .overlay(Capsule().fill(ControlStyle.relief(isDown)))
+                        .fill(isDown ? theme.pillPressed : theme.pill)
+                        .overlay(Capsule().fill(relief(isDown)))
                 }
                 // Set at an angle, as they were on the hardware.
                 .rotationEffect(.degrees(-12))

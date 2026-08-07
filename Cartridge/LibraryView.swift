@@ -23,6 +23,8 @@ struct LibraryView: View {
     @State private var importError: String?
     @State private var pendingDeletion: GameEntry?
     @State private var coverTarget: GameEntry?
+    @State private var isShowingSettings = false
+    @ThemeSetting private var theme
     #if os(iOS)
     @State private var pickedPhoto: PhotosPickerItem?
     #endif
@@ -33,7 +35,7 @@ struct LibraryView: View {
 
     var body: some View {
         ZStack {
-            Backdrop()
+            theme.shell.gradient.ignoresSafeArea()
 
             if library.games.isEmpty {
                 EmptyShelf { isImporting = true }
@@ -48,9 +50,14 @@ struct LibraryView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
+                Button("Appearance", systemImage: "paintpalette") { isShowingSettings = true }
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button("Add Game", systemImage: "plus") { isImporting = true }
             }
         }
+        .sheet(isPresented: $isShowingSettings) { AppearanceView() }
+        .preferredColorScheme(theme.shell.scheme)
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: romTypes,
@@ -86,7 +93,7 @@ struct LibraryView: View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 22) {
                 ForEach(library.games) { entry in
-                    GameTile(entry: entry, cover: library.cover(for: entry)) {
+                    GameTile(entry: entry, cover: library.cover(for: entry), shell: theme.shell) {
                         play(entry)
                     }
                     .contextMenu {
@@ -130,34 +137,14 @@ struct LibraryView: View {
     }
 }
 
-// MARK: - Backdrop
-
-/// A soft gradient rather than a flat fill, and light by default.
-///
-/// The player is black because a 160×144 picture wants every bit of contrast it
-/// can get. The library is the opposite: it's a room, not a screen.
-private struct Backdrop: View {
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        LinearGradient(
-            colors: scheme == .dark
-                ? [Color(white: 0.11), Color(white: 0.06)]
-                : [Color(white: 0.99), Color(red: 0.90, green: 0.93, blue: 0.96)],
-            startPoint: .top, endPoint: .bottom
-        )
-        .ignoresSafeArea()
-    }
-}
-
 // MARK: - Tile
 
 private struct GameTile: View {
     let entry: GameEntry
     let cover: CGImage?
+    let shell: ShellTheme
     let play: () -> Void
 
-    @Environment(\.colorScheme) private var scheme
     @State private var isPressed = false
 
     var body: some View {
@@ -165,13 +152,25 @@ private struct GameTile: View {
             artwork
             label
         }
-        .background(scheme == .dark ? Color(white: 0.16) : .white)
+        .background {
+            if shell.frosted {
+                // Frosted rather than tinted, so the gradient behind actually
+                // shows through the card the way a clear shell shows its board.
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous).fill(shell.card)
+                    }
+            } else {
+                RoundedRectangle(cornerRadius: 16, style: .continuous).fill(shell.card)
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(scheme == .dark ? .white.opacity(0.08) : .black.opacity(0.07))
+                .strokeBorder(shell.border)
         }
-        .shadow(color: .black.opacity(scheme == .dark ? 0.5 : 0.12), radius: 10, y: 4)
+        .shadow(color: .black.opacity(shell.dark ? 0.5 : 0.14), radius: 10, y: 4)
         .scaleEffect(isPressed ? 0.96 : 1)
         .animation(.spring(duration: 0.22), value: isPressed)
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -193,7 +192,7 @@ private struct GameTile: View {
 
     private var artwork: some View {
         ZStack {
-            Rectangle().fill(Color(white: scheme == .dark ? 0.10 : 0.93))
+            Rectangle().fill(shell.dark ? Color(white: 0.10) : Color.black.opacity(0.06))
 
             if let cover {
                 Image(decorative: cover, scale: 1)

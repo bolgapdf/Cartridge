@@ -153,6 +153,15 @@ final class Emulator {
             if hasBattery, let saved = SaveStore.batteryRAM(for: entry.id) {
                 queue.sync { core.batteryRAM = saved }
             }
+
+            // Picking the game back up exactly where it was left. A state from
+            // a different build of the emulator may not decode; failing to
+            // restore just means starting at the title screen, which is what
+            // would have happened anyway.
+            if let resume = SaveStore.autoState(for: entry.id) {
+                queue.sync { try? core.loadState(resume) }
+            }
+
             start()
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription
@@ -183,11 +192,25 @@ final class Emulator {
         recordSession()
     }
 
+    /// Where the machine was, written whenever play stops.
+    ///
+    /// Backing out of a game used to restart it from the title screen, which
+    /// for an hour of unsaved progress is a misclick that costs an evening.
+    /// This is the same thing a save state is, taken without being asked.
+    private func writeAutoState() {
+        guard let entry else { return }
+        queue.sync {
+            guard let data = try? core.saveState() else { return }
+            SaveStore.write(autoState: data, for: entry.id)
+        }
+    }
+
     /// Play time and the tile image, written whenever play stops — which is
     /// also every time the app is backgrounded, so a session that ends by the
     /// phone being locked still counts.
     private func recordSession() {
         guard let entry else { return }
+        writeAutoState()
         if let start = sessionStart {
             library.recordPlay(entry, seconds: Date.now.timeIntervalSince(start))
             sessionStart = nil
@@ -353,6 +376,16 @@ enum SaveStore {
 
     static func write(batteryRAM: Data, for key: String) {
         try? batteryRAM.write(to: url("\(key).sav"), options: .atomic)
+    }
+
+    /// The state written automatically when play stops, kept apart from the
+    /// three the player controls so it can never overwrite one of theirs.
+    static func autoState(for key: String) -> Data? {
+        try? Data(contentsOf: url("\(key).resume"))
+    }
+
+    static func write(autoState: Data, for key: String) {
+        try? autoState.write(to: url("\(key).resume"), options: .atomic)
     }
 
     static func state(for key: String, slot: Int) -> Data? {

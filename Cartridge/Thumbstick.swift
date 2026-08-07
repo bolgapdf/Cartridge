@@ -16,14 +16,9 @@ import SwiftUI
 /// The reason to prefer it on glass is that a d-pad asks your thumb to find a
 /// specific place and stay there, with no edges to feel for. A stick asks only
 /// for a direction.
-private enum StickStyle {
-    static let well = Color(red: 0.08, green: 0.08, blue: 0.10)
-    static let knob = Color(red: 0.20, green: 0.20, blue: 0.23)
-    static let knobActive = Color(red: 0.30, green: 0.30, blue: 0.34)
-}
-
 struct Thumbstick: View {
     let emulator: Emulator
+    @ThemeSetting private var theme
 
     /// How far the thumb must move before a direction registers, in points —
     /// not as a fraction of the well.
@@ -51,7 +46,7 @@ struct Thumbstick: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(StickStyle.well)
+                .fill(theme.buttons.pad.opacity(0.85))
                 .overlay {
                     Circle().strokeBorder(.white.opacity(0.05), lineWidth: 1)
                 }
@@ -68,7 +63,7 @@ struct Thumbstick: View {
                 }
 
             Circle()
-                .fill(held.isEmpty ? StickStyle.knob : StickStyle.knobActive)
+                .fill(held.isEmpty ? theme.buttons.pill : theme.buttons.pillPressed)
                 .overlay {
                     Circle().fill(
                         LinearGradient(

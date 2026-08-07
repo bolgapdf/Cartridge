@@ -18,6 +18,7 @@ struct PlayerView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var wasInterrupted = false
     @State private var sharedClip: ClipExport?
+    @State private var isConfirmingExit = false
     #if os(iOS)
     @AppStorage("useThumbstick") private var useThumbstick = true
     #endif
@@ -56,6 +57,18 @@ struct PlayerView: View {
             ShareSheet(items: [clip.url])
         }
         #endif
+        // Leaving is one tap from the corner of the screen, next to nothing
+        // else, and it ends the session. Worth asking.
+        .confirmationDialog(
+            "Leave \(emulator.title ?? "this game")?",
+            isPresented: $isConfirmingExit,
+            titleVisibility: .visible
+        ) {
+            Button("Leave Game") { close() }
+            Button("Keep Playing", role: .cancel) {}
+        } message: {
+            Text("Where you are is saved automatically, and you'll come back to this exact spot.")
+        }
     }
 
     @ViewBuilder
@@ -112,7 +125,7 @@ struct PlayerView: View {
     /// worth more to the picture than it is to three buttons.
     private var utilityStrip: some View {
         HStack(spacing: 14) {
-            controlButton("chevron.left", label: "Library", action: close)
+            controlButton("chevron.left", label: "Library") { isConfirmingExit = true }
 
             Spacer(minLength: 0)
 
