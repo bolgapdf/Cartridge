@@ -24,6 +24,13 @@ struct GameEntry: Codable, Identifiable, Hashable {
     var supportsColor: Bool
     var addedAt: Date
     var lastPlayedAt: Date?
+    /// Bumped whenever the artwork changes, so the grid knows to reload it —
+    /// a file being overwritten on disk isn't something a view can observe.
+    var coverVersion = 0
+    /// Set when the artwork was chosen rather than captured. A chosen cover is
+    /// never replaced by a screenshot; the whole point of picking one is that
+    /// it stops changing.
+    var hasCustomCover = false
     /// Total time spent in this game, for the library's second line.
     var secondsPlayed: Double = 0
 
@@ -58,6 +65,9 @@ final class GameLibrary {
     private let root: URL
     private let romsDirectory: URL
     private let coversDirectory: URL
+    /// Decoding a PNG per tile per frame is enough to make scrolling stutter,
+    /// and the grid re-evaluates constantly.
+    private var coverCache: [String: CGImage] = [:]
 
     init() {
         let base = FileManager.default
@@ -155,7 +165,9 @@ final class GameLibrary {
 
     func romURL(for entry: GameEntry) -> URL { romURL(for: entry.id) }
     private func romURL(for id: String) -> URL { romsDirectory.appending(path: "\(id).gb") }
-    func coverURL(for entry: GameEntry) -> URL { coversDirectory.appending(path: "\(entry.id).png") }
+    func coverURL(for entry: GameEntry) -> URL {
+        coversDirectory.appending(path: "\(entry.id).png")
+    }
 
     func delete(_ entry: GameEntry) {
         let manager = FileManager.default
@@ -178,24 +190,61 @@ final class GameLibrary {
         save()
     }
 
-    /// The last frame of the last session, used as the tile.
+    /// The last frame of the last session, used as the tile when nothing has
+    /// been chosen.
     ///
-    /// Standing in for box art, which can't be shipped and can't be derived
-    /// from the ROM — and which turns out to be less useful anyway. A shot of
-    /// where you actually stopped tells you more than a cover does.
+    /// It stands in for box art, which can't be shipped and can't be derived
+    /// from a ROM — and it's arguably better: a shot of where you actually
+    /// stopped tells you more than a cover does.
     func recordCover(_ image: CGImage, for entry: GameEntry) {
+        guard !entry.hasCustomCover else { return }
+        write(image, to: coverURL(for: entry))
+        bumpCover(entry)
+    }
+
+    /// Artwork the player chose, which outranks the screenshot from then on.
+    func setCustomCover(_ image: CGImage, for entry: GameEntry) {
+        write(image, to: coverURL(for: entry))
+        guard let index = games.firstIndex(where: { $0.id == entry.id }) else { return }
+        games[index].hasCustomCover = true
+        bumpCover(entry)
+        save()
+    }
+
+    func clearCustomCover(for entry: GameEntry) {
+        try? FileManager.default.removeItem(at: coverURL(for: entry))
+        guard let index = games.firstIndex(where: { $0.id == entry.id }) else { return }
+        games[index].hasCustomCover = false
+        bumpCover(entry)
+        save()
+    }
+
+    func cover(for entry: GameEntry) -> CGImage? {
+        let key = "\(entry.id)-\(entry.coverVersion)"
+        if let cached = coverCache[key] { return cached }
+
         let url = coverURL(for: entry)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return nil }
+
+        coverCache[key] = image
+        return image
+    }
+
+    private func bumpCover(_ entry: GameEntry) {
+        guard let index = games.firstIndex(where: { $0.id == entry.id }) else { return }
+        coverCache.removeValue(forKey: "\(entry.id)-\(games[index].coverVersion)")
+        games[index].coverVersion += 1
+        save()
+    }
+
+    private func write(_ image: CGImage, to url: URL) {
         guard let destination = CGImageDestinationCreateWithURL(
             url as CFURL, UTType.png.identifier as CFString, 1, nil
         ) else { return }
         CGImageDestinationAddImage(destination, image, nil)
         CGImageDestinationFinalize(destination)
-    }
-
-    func cover(for entry: GameEntry) -> CGImage? {
-        let url = coverURL(for: entry)
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        return CGImageSourceCreateImageAtIndex(source, 0, nil)
     }
 
     // MARK: - Persistence

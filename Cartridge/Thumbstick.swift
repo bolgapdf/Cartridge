@@ -16,6 +16,12 @@ import SwiftUI
 /// The reason to prefer it on glass is that a d-pad asks your thumb to find a
 /// specific place and stay there, with no edges to feel for. A stick asks only
 /// for a direction.
+private enum StickStyle {
+    static let well = Color(red: 0.08, green: 0.08, blue: 0.10)
+    static let knob = Color(red: 0.20, green: 0.20, blue: 0.23)
+    static let knobActive = Color(red: 0.30, green: 0.30, blue: 0.34)
+}
+
 struct Thumbstick: View {
     let emulator: Emulator
 
@@ -45,12 +51,35 @@ struct Thumbstick: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(Color(white: 0.14))
-                .overlay(Circle().strokeBorder(.white.opacity(0.06)))
+                .fill(StickStyle.well)
+                .overlay {
+                    Circle().strokeBorder(.white.opacity(0.05), lineWidth: 1)
+                }
+                .overlay {
+                    // Faint compass marks, so the well reads as a direction
+                    // control even when the knob is centred over it.
+                    ForEach(0..<4, id: \.self) { index in
+                        Capsule()
+                            .fill(.white.opacity(0.10))
+                            .frame(width: 2, height: 8)
+                            .offset(y: -(radius - 11))
+                            .rotationEffect(.degrees(Double(index) * 90))
+                    }
+                }
 
             Circle()
-                .fill(Color(white: held.isEmpty ? 0.26 : 0.34))
+                .fill(held.isEmpty ? StickStyle.knob : StickStyle.knobActive)
+                .overlay {
+                    Circle().fill(
+                        LinearGradient(
+                            colors: [.white.opacity(0.20), .clear, .black.opacity(0.25)],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    )
+                }
+                .overlay(Circle().strokeBorder(.black.opacity(0.3), lineWidth: 1))
                 .frame(width: knobRadius * 2, height: knobRadius * 2)
+                .shadow(color: .black.opacity(0.5), radius: 5, y: 2)
                 .offset(offset)
                 .animation(.interactiveSpring(duration: 0.12), value: offset)
         }

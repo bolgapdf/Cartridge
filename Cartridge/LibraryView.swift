@@ -5,8 +5,16 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(iOS)
+import PhotosUI
+#endif
 
 /// The shelf. Every game the app has been given, most recently played first.
+///
+/// Laid out as a channel grid, which is the arrangement the Wii got right: one
+/// tile per thing, all the same size, the picture doing the identifying. A list
+/// of filenames is faster to build and worse at the only job the screen has,
+/// which is letting you find a game without reading.
 struct LibraryView: View {
     let library: GameLibrary
     let play: (GameEntry) -> Void
@@ -14,11 +22,19 @@ struct LibraryView: View {
     @State private var isImporting = false
     @State private var importError: String?
     @State private var pendingDeletion: GameEntry?
+    @State private var coverTarget: GameEntry?
+    #if os(iOS)
+    @State private var pickedPhoto: PhotosPickerItem?
+    #endif
 
-    private let columns = [GridItem(.adaptive(minimum: 150, maximum: 240), spacing: 16)]
+    /// 150 rather than 168, which is the difference between two columns on a
+    /// phone and one. A single column of tiles is a list wearing a costume.
+    private let columns = [GridItem(.adaptive(minimum: 150, maximum: 230), spacing: 18)]
 
     var body: some View {
-        Group {
+        ZStack {
+            Backdrop()
+
             if library.games.isEmpty {
                 EmptyShelf { isImporting = true }
             } else {
@@ -26,6 +42,10 @@ struct LibraryView: View {
             }
         }
         .navigationTitle("Cartridge")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.large)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        #endif
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Add Game", systemImage: "plus") { isImporting = true }
@@ -59,24 +79,35 @@ struct LibraryView: View {
         } message: {
             Text("The battery save and all save states go with it. This can't be undone.")
         }
+        .modifier(CoverPicker(library: library, target: $coverTarget))
     }
 
     private var shelf: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 20) {
+            LazyVGrid(columns: columns, spacing: 22) {
                 ForEach(library.games) { entry in
-                    GameTile(entry: entry, cover: library.cover(for: entry))
-                        .onTapGesture { play(entry) }
-                        .contextMenu {
-                            Button("Play", systemImage: "play.fill") { play(entry) }
-                            Button("Delete", systemImage: "trash", role: .destructive) {
-                                pendingDeletion = entry
+                    GameTile(entry: entry, cover: library.cover(for: entry)) {
+                        play(entry)
+                    }
+                    .contextMenu {
+                        Button("Play", systemImage: "play.fill") { play(entry) }
+                        Divider()
+                        Button("Choose Artwork…", systemImage: "photo") { coverTarget = entry }
+                        if entry.hasCustomCover {
+                            Button("Use Screenshot Instead", systemImage: "arrow.uturn.backward") {
+                                library.clearCustomCover(for: entry)
                             }
                         }
+                        Divider()
+                        Button("Delete", systemImage: "trash", role: .destructive) {
+                            pendingDeletion = entry
+                        }
+                    }
                 }
             }
-            .padding(20)
+            .padding(22)
         }
+        .scrollContentBackground(.hidden)
     }
 
     private func importGames(_ result: Result<[URL], Error>) {
@@ -99,49 +130,126 @@ struct LibraryView: View {
     }
 }
 
+// MARK: - Backdrop
+
+/// A soft gradient rather than a flat fill, and light by default.
+///
+/// The player is black because a 160×144 picture wants every bit of contrast it
+/// can get. The library is the opposite: it's a room, not a screen.
+private struct Backdrop: View {
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        LinearGradient(
+            colors: scheme == .dark
+                ? [Color(white: 0.11), Color(white: 0.06)]
+                : [Color(white: 0.99), Color(red: 0.90, green: 0.93, blue: 0.96)],
+            startPoint: .top, endPoint: .bottom
+        )
+        .ignoresSafeArea()
+    }
+}
+
 // MARK: - Tile
 
 private struct GameTile: View {
     let entry: GameEntry
     let cover: CGImage?
+    let play: () -> Void
+
+    @Environment(\.colorScheme) private var scheme
+    @State private var isPressed = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(white: 0.12))
-
-                if let cover {
-                    // The last frame of the last session, which says more about
-                    // where you are than box art would.
-                    Image(decorative: cover, scale: 1)
-                        .interpolation(.none)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else {
-                    Image(systemName: entry.supportsColor ? "gamecontroller.fill" : "gamecontroller")
-                        .font(.system(size: 34, weight: .light))
-                        .foregroundStyle(.tertiary)
+        VStack(spacing: 0) {
+            artwork
+            label
+        }
+        .background(scheme == .dark ? Color(white: 0.16) : .white)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(scheme == .dark ? .white.opacity(0.08) : .black.opacity(0.07))
+        }
+        .shadow(color: .black.opacity(scheme == .dark ? 0.5 : 0.12), radius: 10, y: 4)
+        .scaleEffect(isPressed ? 0.96 : 1)
+        .animation(.spring(duration: 0.22), value: isPressed)
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        // A press that tracks the finger, so a tile visibly responds before the
+        // game has loaded — which on a 2 MB cartridge is long enough to notice.
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { value in
+                    isPressed = false
+                    let travel = hypot(value.translation.width, value.translation.height)
+                    if travel < 12 { play() }
                 }
-            }
-            .aspectRatio(160.0 / 144.0, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(.white.opacity(0.08))
-            }
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(entry.title)
+        .accessibilityAddTraits(.isButton)
+    }
 
+    private var artwork: some View {
+        ZStack {
+            Rectangle().fill(Color(white: scheme == .dark ? 0.10 : 0.93))
+
+            if let cover {
+                Image(decorative: cover, scale: 1)
+                    // Game screenshots are 160×144 shown at three times that, so
+                    // smoothing them would undo the point.
+                    .interpolation(entry.hasCustomCover ? .high : .none)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Image(systemName: "gamecontroller")
+                    .font(.system(size: 30, weight: .light))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .aspectRatio(160.0 / 144.0, contentMode: .fit)
+        .clipped()
+        .overlay(alignment: .topTrailing) {
+            if entry.supportsColor {
+                ColorBadge()
+                    .padding(7)
+            }
+        }
+    }
+
+    private var label: some View {
+        VStack(alignment: .leading, spacing: 2) {
             Text(entry.title)
                 .font(.subheadline.weight(.semibold))
-                .lineLimit(2, reservesSpace: true)
-                .multilineTextAlignment(.leading)
+                .lineLimit(1)
+                .truncationMode(.tail)
 
             Text(entry.playedDescription ?? entry.subtitle)
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .contentShape(Rectangle())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+    }
+}
+
+/// The little rainbow the Color cartridges carried, which is exactly how you
+/// told them apart on a shelf.
+private struct ColorBadge: View {
+    var body: some View {
+        Circle()
+            .fill(
+                AngularGradient(
+                    colors: [.red, .orange, .yellow, .green, .blue, .purple, .red],
+                    center: .center
+                )
+            )
+            .frame(width: 11, height: 11)
+            .overlay(Circle().strokeBorder(.white.opacity(0.85), lineWidth: 1.2))
+            .shadow(color: .black.opacity(0.3), radius: 1.5, y: 0.5)
     }
 }
 
@@ -153,7 +261,7 @@ private struct EmptyShelf: View {
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: "tray")
-                .font(.system(size: 46, weight: .light))
+                .font(.system(size: 44, weight: .light))
                 .foregroundStyle(.tertiary)
 
             Text("No games yet")

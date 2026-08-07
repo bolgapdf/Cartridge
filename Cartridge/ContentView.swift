@@ -42,7 +42,6 @@ struct ContentView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .task { openLaunchArgumentROM() }
     }
 

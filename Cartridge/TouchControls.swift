@@ -6,6 +6,31 @@
 #if os(iOS)
 import SwiftUI
 
+/// The colours the hardware used.
+///
+/// The DMG's buttons weren't grey — the d-pad was near-black, A and B were a
+/// deep magenta, and start and select were pale slabs set at an angle. Matching
+/// that is worth more than any amount of neutral styling: it makes the controls
+/// legible at a glance, because the shapes and colours already mean something.
+private enum ControlStyle {
+    static let pad = Color(red: 0.13, green: 0.13, blue: 0.15)
+    static let padPressed = Color(red: 0.26, green: 0.26, blue: 0.30)
+    static let face = Color(red: 0.60, green: 0.13, blue: 0.32)
+    static let facePressed = Color(red: 0.76, green: 0.20, blue: 0.42)
+    static let pill = Color(red: 0.42, green: 0.42, blue: 0.47)
+    static let pillPressed = Color(red: 0.58, green: 0.58, blue: 0.63)
+    static let well = Color(red: 0.09, green: 0.09, blue: 0.11)
+
+    /// A highlight along the top edge and a shadow underneath, which is all it
+    /// takes to read as a physical button rather than a coloured rectangle.
+    static func relief(_ pressed: Bool) -> LinearGradient {
+        LinearGradient(
+            colors: [.white.opacity(pressed ? 0.04 : 0.22), .clear, .black.opacity(0.22)],
+            startPoint: .top, endPoint: .bottom
+        )
+    }
+}
+
 /// On-screen controls, laid out the way the hardware was.
 ///
 /// Split into halves so the same pieces can sit under the screen in portrait or
@@ -72,9 +97,13 @@ private struct DirectionalPad: View {
             arm(.up, "chevron.up")
             HStack(spacing: 0) {
                 arm(.left, "chevron.left")
-                Rectangle()
-                    .fill(Color(white: 0.16))
-                    .frame(width: size, height: size)
+                ZStack {
+                    Rectangle().fill(ControlStyle.pad)
+                    Circle()
+                        .fill(.black.opacity(0.25))
+                        .frame(width: 14, height: 14)
+                }
+                .frame(width: size, height: size)
                 arm(.right, "chevron.right")
             }
             arm(.down, "chevron.down")
@@ -85,10 +114,11 @@ private struct DirectionalPad: View {
     private func arm(_ button: ConsoleButton, _ symbol: String) -> some View {
         PressableSurface(button: button, emulator: emulator) { isDown in
             ZStack {
-                Rectangle().fill(Color(white: isDown ? 0.34 : 0.16))
+                Rectangle().fill(isDown ? ControlStyle.padPressed : ControlStyle.pad)
+                ControlStyle.relief(isDown)
                 Image(systemName: symbol)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .font(.system(size: 14, weight: .heavy))
+                    .foregroundStyle(.white.opacity(0.5))
             }
             .frame(width: size, height: size)
         }
@@ -109,12 +139,15 @@ private struct FaceButtons: View {
     private func round(_ button: ConsoleButton, _ label: String) -> some View {
         PressableSurface(button: button, emulator: emulator) { isDown in
             ZStack {
-                Circle().fill(Color(white: isDown ? 0.42 : 0.22))
+                Circle().fill(isDown ? ControlStyle.facePressed : ControlStyle.face)
+                Circle().fill(ControlStyle.relief(isDown))
+                Circle().strokeBorder(.black.opacity(0.28), lineWidth: 1)
                 Text(label)
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.75))
+                    .font(.system(size: 21, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.9))
             }
-            .frame(width: 62, height: 62)
+            .frame(width: 64, height: 64)
+            .shadow(color: .black.opacity(0.45), radius: isDown ? 1 : 4, y: isDown ? 0 : 2)
         }
     }
 }
@@ -127,11 +160,18 @@ private struct PillButton: View {
     var body: some View {
         PressableSurface(button: button, emulator: emulator) { isDown in
             Text(title)
-                .font(.system(size: 11, weight: .heavy, design: .rounded))
-                .foregroundStyle(.white.opacity(0.65))
-                .padding(.horizontal, 18)
-                .padding(.vertical, 9)
-                .background(Color(white: isDown ? 0.36 : 0.18), in: Capsule())
+                .font(.system(size: 10, weight: .heavy, design: .rounded))
+                .kerning(0.6)
+                .foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 17)
+                .padding(.vertical, 8)
+                .background {
+                    Capsule()
+                        .fill(isDown ? ControlStyle.pillPressed : ControlStyle.pill)
+                        .overlay(Capsule().fill(ControlStyle.relief(isDown)))
+                }
+                // Set at an angle, as they were on the hardware.
+                .rotationEffect(.degrees(-12))
         }
     }
 }
