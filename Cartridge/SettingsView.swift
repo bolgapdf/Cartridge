@@ -19,8 +19,44 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        #if os(macOS)
+        // The Mac gets its own chrome. A `NavigationStack` in a sheet put its
+        // toolbar somewhere that overlapped the last row, and Form's default
+        // Mac style is a two-column layout that pushed the section labels off
+        // the left edge of the sheet entirely.
+        VStack(spacing: 0) {
+            Text("Settings")
+                .font(.headline)
+                .padding(.top, 16)
+                .padding(.bottom, 4)
+
+            form
+
+            Divider()
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(14)
+        }
+        .frame(width: 480, height: 640)
+        #else
         NavigationStack {
-            Form {
+            form
+                .navigationTitle("Settings")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
+                }
+        }
+        #endif
+    }
+
+    private var form: some View {
+        Form {
                 Section {
                     LabeledContent("iCloud") {
                         Text(library.isUsingCloud ? "Syncing"
@@ -72,19 +108,11 @@ struct SettingsView: View {
                     }
                 }
             }
-            .navigationTitle("Settings")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-        #if os(macOS)
-        .frame(width: 420, height: 520)
-        #endif
+        // Grouped explicitly. On the Mac, Form defaults to a column layout
+        // that reserves the left side for labels — which is right for a pane
+        // full of fields and wrong for one that's mostly rows carrying their
+        // own contents.
+        .formStyle(.grouped)
     }
 
     private func row<Swatch: View>(
