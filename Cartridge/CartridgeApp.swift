@@ -21,9 +21,11 @@ struct CartridgeApp: App {
             ContentView()
         }
         #if os(macOS)
-        // The screen is 160×144, so anything is a scale factor. Locking the
-        // window to that ratio keeps whole pixels whole.
-        .windowResizability(.contentSize)
+        // A floor rather than a fixed size. `.contentSize` pinned the window to
+        // whatever the layout asked for, which for a library that's mostly
+        // flexible space is not a useful answer.
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 900, height: 640)
         #endif
     }
 }

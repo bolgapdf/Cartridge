@@ -5,9 +5,6 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
-#if os(iOS)
-import PhotosUI
-#endif
 
 /// The shelf. Every game the app has been given, most recently played first.
 ///
@@ -25,9 +22,6 @@ struct LibraryView: View {
     @State private var coverTarget: GameEntry?
     @State private var isShowingSettings = false
     @ThemeSetting private var theme
-    #if os(iOS)
-    @State private var pickedPhoto: PhotosPickerItem?
-    #endif
 
     /// 150 rather than 168, which is the difference between two columns on a
     /// phone and one. A single column of tiles is a list wearing a costume.

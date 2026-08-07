@@ -191,6 +191,13 @@ struct PlayerView: View {
     #if os(macOS)
     @ToolbarContentBuilder
     private var macToolbar: some ToolbarContent {
+        // The Mac had no way out of a game at all. The back button lives in the
+        // phone's floating strip, and moving the player out of the navigation
+        // stack took away the one the system had been providing — so opening a
+        // game on the Mac was a one-way door.
+        ToolbarItem(placement: .navigation) {
+            Button("Library", systemImage: "chevron.left") { isConfirmingExit = true }
+        }
         ToolbarItem(placement: .primaryAction) {
             Button(
                 emulator.isRunning ? "Pause" : "Resume",
