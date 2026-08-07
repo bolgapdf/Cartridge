@@ -158,7 +158,7 @@ final class Emulator {
             // a different build of the emulator may not decode; failing to
             // restore just means starting at the title screen, which is what
             // would have happened anyway.
-            if let resume = SaveStore.autoState(for: entry.id) {
+            if Self.autoResumeEnabled, let resume = SaveStore.autoState(for: entry.id) {
                 queue.sync { try? core.loadState(resume) }
             }
 
@@ -192,13 +192,22 @@ final class Emulator {
         recordSession()
     }
 
+    /// Whether leaving a game keeps your place.
+    ///
+    /// Read fresh each time rather than cached: it's a switch someone can flip
+    /// between one session and the next, and a stale copy would mean the
+    /// setting appearing not to take until the app restarted.
+    static var autoResumeEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "autoResume")
+    }
+
     /// Where the machine was, written whenever play stops.
     ///
     /// Backing out of a game used to restart it from the title screen, which
     /// for an hour of unsaved progress is a misclick that costs an evening.
     /// This is the same thing a save state is, taken without being asked.
     private func writeAutoState() {
-        guard let entry else { return }
+        guard let entry, Self.autoResumeEnabled else { return }
         queue.sync {
             guard let data = try? core.saveState() else { return }
             SaveStore.write(autoState: data, for: entry.id)

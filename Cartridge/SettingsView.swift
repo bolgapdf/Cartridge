@@ -1,23 +1,43 @@
 //
-//  AppearanceView.swift
+//  SettingsView.swift
 //  Cartridge
 //
 
 import SwiftUI
 
-/// Picks the shell and the buttons.
+/// Appearance, and the one behaviour worth choosing.
 ///
-/// Shown as swatches rather than a list of names, because the whole subject is
-/// what something looks like and a word for a colour is a worse description of
-/// it than the colour.
-struct AppearanceView: View {
+/// The themes are shown as swatches rather than a list of names, because the
+/// whole subject is what something looks like and a word for a colour is a
+/// worse description of it than the colour.
+struct SettingsView: View {
+    let library: GameLibrary
+
     @AppStorage("shellTheme") private var shellID = ShellTheme.gameBoy.id
     @AppStorage("buttonTheme") private var buttonID = ButtonTheme.classic.id
+    @AppStorage("autoResume") private var autoResume = true
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Toggle("Resume Where You Left Off", isOn: $autoResume)
+                        .onChange(of: autoResume) { _, enabled in
+                            // Off has to mean off. A state kept from whenever
+                            // this was last switched off would resurface the
+                            // next time it's switched on, which reads as the
+                            // app losing your progress rather than keeping it.
+                            if !enabled { library.clearAutoStates() }
+                        }
+                } header: {
+                    Text("Saving")
+                } footer: {
+                    Text(autoResume
+                         ? "Leaving a game saves exactly where you are, and opening it again puts you back there. Your in-game saves are kept either way."
+                         : "Leaving a game starts it from the title screen next time, like turning the console off. Only your in-game saves are kept.")
+                }
+
                 Section("Shelf") {
                     ForEach(ShellTheme.all) { theme in
                         row(name: theme.name, selected: theme.id == shellID) {
@@ -38,7 +58,7 @@ struct AppearanceView: View {
                     }
                 }
             }
-            .navigationTitle("Appearance")
+            .navigationTitle("Settings")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif

@@ -20,6 +20,7 @@ struct PlayerView: View {
     @State private var sharedClip: ClipExport?
     @State private var isConfirmingExit = false
     @ThemeSetting private var theme
+    @AppStorage("autoResume") private var autoResume = true
     #if os(iOS)
     @AppStorage("useThumbstick") private var useThumbstick = true
     #endif
@@ -69,10 +70,12 @@ struct PlayerView: View {
             isPresented: $isConfirmingExit,
             titleVisibility: .visible
         ) {
-            Button("Leave Game") { close() }
+            Button("Leave Game", role: autoResume ? nil : .destructive) { close() }
             Button("Keep Playing", role: .cancel) {}
         } message: {
-            Text("Where you are is saved automatically, and you'll come back to this exact spot.")
+            Text(autoResume
+                 ? "Where you are is saved automatically, and you'll come back to this exact spot."
+                 : "The game will start from the title screen next time. Anything since your last in-game save will be lost.")
         }
     }
 

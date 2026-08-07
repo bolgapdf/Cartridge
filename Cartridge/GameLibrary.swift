@@ -180,6 +180,18 @@ final class GameLibrary {
         save()
     }
 
+    /// Throws away every "where you were" state.
+    ///
+    /// Called when resuming is switched off, so that off means off. Without it,
+    /// switching the setting back on later would drop you into a state from
+    /// whenever you last switched it off — which could be weeks ago and would
+    /// look like the app losing your progress rather than restoring it.
+    func clearAutoStates() {
+        for entry in games {
+            try? FileManager.default.removeItem(at: root.appending(path: "\(entry.id).resume"))
+        }
+    }
+
     // MARK: - Play records
 
     func recordPlay(_ entry: GameEntry, seconds: Double) {

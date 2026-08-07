@@ -50,13 +50,13 @@ struct LibraryView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button("Appearance", systemImage: "paintpalette") { isShowingSettings = true }
+                Button("Settings", systemImage: "slider.horizontal.3") { isShowingSettings = true }
             }
             ToolbarItem(placement: .primaryAction) {
                 Button("Add Game", systemImage: "plus") { isImporting = true }
             }
         }
-        .sheet(isPresented: $isShowingSettings) { AppearanceView() }
+        .sheet(isPresented: $isShowingSettings) { SettingsView(library: library) }
         .preferredColorScheme(theme.shell.scheme)
         .fileImporter(
             isPresented: $isImporting,
