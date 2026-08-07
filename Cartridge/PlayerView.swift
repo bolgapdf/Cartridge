@@ -19,6 +19,7 @@ struct PlayerView: View {
     @State private var wasInterrupted = false
     @State private var sharedClip: ClipExport?
     @State private var isConfirmingExit = false
+    @ThemeSetting private var theme
     #if os(iOS)
     @AppStorage("useThumbstick") private var useThumbstick = true
     #endif
@@ -30,10 +31,14 @@ struct PlayerView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            // The player is the console body, so it wears the same shell as the
+            // shelf it was opened from. It used to be black regardless, which
+            // made choosing a light theme feel like the setting only half
+            // applied.
+            theme.shell.gradient.ignoresSafeArea()
             content
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(theme.shell.scheme)
         #if os(iOS)
         // No navigation bar. It cost a strip of height the screen wanted, put a
         // second back chevron next to the one below, and none of a game's
@@ -110,11 +115,21 @@ struct PlayerView: View {
     /// floated in a field of black. The console's ratio is a known constant, so
     /// stating it here takes the question away from UIKit entirely.
     private var screen: some View {
-        GameScreen(emulator: emulator)
+        GameScreen(emulator: emulator, surround: theme.shell.bezel)
             .aspectRatio(
                 CGFloat(GameBoy.screenSize.width) / CGFloat(GameBoy.screenSize.height),
                 contentMode: .fit
             )
+            // A frame around the glass, as every handheld had. On a light shell
+            // it's what keeps a small bright screen from being washed out by
+            // the body around it, and it gives the letterboxing a home.
+            .padding(10)
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(theme.shell.bezel)
+                    .shadow(color: .black.opacity(0.28), radius: 8, y: 3)
+            }
+            .padding(.horizontal, 6)
     }
 
     // MARK: - Controls

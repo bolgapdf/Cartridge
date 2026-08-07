@@ -22,6 +22,12 @@ struct ShellTheme: Identifiable, Hashable {
     /// Which way the text has to go. Set explicitly rather than derived from
     /// the background, because a mid grey is genuinely ambiguous.
     let dark: Bool
+    /// The surround the screen sits in.
+    ///
+    /// Every handheld did this: a light shell with a much darker frame around
+    /// the glass. It isn't decoration — it's what stops a bright body washing
+    /// out a small screen, and it gives the letterboxing somewhere to be.
+    let bezel: Color
 
     var gradient: LinearGradient {
         LinearGradient(colors: [top, bottom], startPoint: .top, endPoint: .bottom)
@@ -36,7 +42,8 @@ struct ShellTheme: Identifiable, Hashable {
         top: Color(red: 0.90, green: 0.89, blue: 0.86),
         bottom: Color(red: 0.75, green: 0.74, blue: 0.71),
         card: Color(red: 0.95, green: 0.95, blue: 0.93),
-        border: .black.opacity(0.10), frosted: false, dark: false
+        border: .black.opacity(0.10), frosted: false, dark: false,
+        bezel: Color(red: 0.29, green: 0.28, blue: 0.34)
     )
 
     /// Desktop beige, and specifically the yellowed kind — the colour those
@@ -47,7 +54,8 @@ struct ShellTheme: Identifiable, Hashable {
         bottom: Color(red: 0.78, green: 0.74, blue: 0.60),
         card: Color(red: 0.96, green: 0.94, blue: 0.87),
         border: Color(red: 0.45, green: 0.40, blue: 0.28).opacity(0.22),
-        frosted: false, dark: false
+        frosted: false, dark: false,
+        bezel: Color(red: 0.24, green: 0.22, blue: 0.17)
     )
 
     /// The clear shells, where the appeal was seeing the board through them.
@@ -56,7 +64,8 @@ struct ShellTheme: Identifiable, Hashable {
         top: Color(red: 0.87, green: 0.94, blue: 0.94),
         bottom: Color(red: 0.68, green: 0.82, blue: 0.83),
         card: .white.opacity(0.30),
-        border: .white.opacity(0.55), frosted: true, dark: false
+        border: .white.opacity(0.55), frosted: true, dark: false,
+        bezel: Color(red: 0.16, green: 0.21, blue: 0.22)
     )
 
     static let light = ShellTheme(
@@ -64,7 +73,8 @@ struct ShellTheme: Identifiable, Hashable {
         top: Color(white: 0.99),
         bottom: Color(red: 0.90, green: 0.93, blue: 0.96),
         card: .white,
-        border: .black.opacity(0.07), frosted: false, dark: false
+        border: .black.opacity(0.07), frosted: false, dark: false,
+        bezel: Color(red: 0.15, green: 0.17, blue: 0.20)
     )
 
     static let midnight = ShellTheme(
@@ -72,7 +82,8 @@ struct ShellTheme: Identifiable, Hashable {
         top: Color(white: 0.13),
         bottom: Color(white: 0.05),
         card: Color(white: 0.16),
-        border: .white.opacity(0.08), frosted: false, dark: true
+        border: .white.opacity(0.08), frosted: false, dark: true,
+        bezel: .black
     )
 
     static let all: [ShellTheme] = [gameBoy, beige, clear, light, midnight]
@@ -158,6 +169,15 @@ extension Color {
             blue: components.blue + (other.components.blue - components.blue) * amount,
             opacity: components.alpha
         )
+    }
+
+    /// For handing a colour to Core Animation, which doesn't take SwiftUI's.
+    var cgColour: CGColor {
+        #if os(macOS)
+        (NSColor(self).usingColorSpace(.deviceRGB) ?? .black).cgColor
+        #else
+        UIColor(self).cgColor
+        #endif
     }
 
     private var components: (red: Double, green: Double, blue: Double, alpha: Double) {

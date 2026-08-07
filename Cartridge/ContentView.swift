@@ -67,12 +67,13 @@ struct ContentView: View {
 
 struct GameScreen: View {
     let emulator: Emulator
+    let surround: Color
 
     var body: some View {
         // A view of its own so the sixty-times-a-second frame update
         // invalidates only the screen — read higher up, `emulator.frame` would
         // make the toolbar and everything else depend on it too.
-        ScreenView(frame: emulator.frame)
+        ScreenView(frame: emulator.frame, surround: surround)
     }
 }
 
@@ -108,6 +109,8 @@ private extension PlatformView {
 /// `aspectRatio` here.
 struct ScreenView: PlatformViewRepresentable {
     let frame: CGImage?
+    /// What the letterboxing either side of the picture is filled with.
+    let surround: Color
 
     func makeNSView(context: Context) -> PlatformView { makeView() }
     func updateNSView(_ view: PlatformView, context: Context) { update(view) }
@@ -140,7 +143,7 @@ struct ScreenView: PlatformViewRepresentable {
     private func makeView() -> PlatformView {
         let view = PlatformView()
         guard let layer = view.screenLayer else { return view }
-        layer.backgroundColor = CGColor(gray: 0, alpha: 1)
+        layer.backgroundColor = surround.cgColour
         layer.contentsGravity = .resizeAspect
         // Every pixel is drawn at ten times its size or more, so smoothing
         // would turn a deliberately chunky picture into a blurry one.
@@ -151,6 +154,7 @@ struct ScreenView: PlatformViewRepresentable {
 
     private func update(_ view: PlatformView) {
         guard let layer = view.screenLayer else { return }
+        layer.backgroundColor = surround.cgColour
         // Without this, Core Animation cross-fades between frames — a quarter
         // second of implicit animation applied to something that changes every
         // sixteen milliseconds.
