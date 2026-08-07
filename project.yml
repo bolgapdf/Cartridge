@@ -34,6 +34,18 @@ targets:
         ENABLE_PREVIEWS: true
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # iCloud is written and waiting on one thing: the container has to be
+        # registered against the team, which is a change to the developer
+        # portal and can only be made by Xcode with an account signed in.
+        # Until then this line stays commented out — with it, the app doesn't
+        # build at all; without it, the app runs on local storage and switches
+        # to iCloud the moment the capability exists.
+        #
+        # Turn it on with: Xcode > Cartridge_iOS > Signing & Capabilities >
+        # + Capability > iCloud > iCloud Documents > container
+        # "iCloud.me.jacobsilva.Cartridge". Then uncomment.
+        #
+        # CODE_SIGN_ENTITLEMENTS: Cartridge/Cartridge.entitlements
 
         # Per-platform settings go through Xcode's own `[sdk=...]` conditions.
         # `settings_iOS:` / `settings_macOS:` are not XcodeGen keys — they sat

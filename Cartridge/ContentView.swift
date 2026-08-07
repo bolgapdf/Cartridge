@@ -43,6 +43,13 @@ struct ContentView: View {
             }
         }
         .task { openLaunchArgumentROM() }
+        .task {
+            // Resolving the container can take a moment, so it happens after
+            // first paint rather than on the way to it. Until it lands, the app
+            // is running on local storage and working normally.
+            guard let cloud = await CloudStorage.resolveRoot() else { return }
+            library.adoptCloudRoot(cloud)
+        }
     }
 
     private func start(_ entry: GameEntry) {

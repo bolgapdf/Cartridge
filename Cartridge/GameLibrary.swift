@@ -62,17 +62,19 @@ final class GameLibrary {
 
     private(set) var games: [GameEntry] = []
 
-    private let root: URL
-    private let romsDirectory: URL
-    private let coversDirectory: URL
+    /// Mutable because the app starts on local storage and moves to iCloud
+    /// once the container resolves, which can take longer than first paint.
+    private var root: URL
+    private var romsDirectory: URL
+    private var coversDirectory: URL
+    /// Shown in Settings, so the answer to "is this syncing" isn't a guess.
+    private(set) var isUsingCloud = false
     /// Decoding a PNG per tile per frame is enough to make scrolling stutter,
     /// and the grid re-evaluates constantly.
     private var coverCache: [String: CGImage] = [:]
 
     init() {
-        let base = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appending(path: "Cartridge", directoryHint: .isDirectory)
+        let base = CloudStorage.localRoot
         root = base
         romsDirectory = base.appending(path: "Games", directoryHint: .isDirectory)
         coversDirectory = base.appending(path: "Covers", directoryHint: .isDirectory)
@@ -81,6 +83,115 @@ final class GameLibrary {
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
         load()
+    }
+
+    // MARK: - iCloud
+
+    /// Moves onto the iCloud container, bringing anything local along.
+    ///
+    /// One direction only, and only for files the container doesn't already
+    /// have. This isn't a sync engine — iCloud is the sync engine. All this
+    /// does is decide which folder is the one being synced, once.
+    func adoptCloudRoot(_ cloud: URL) {
+        guard !isUsingCloud, cloud != root else { return }
+
+        let localGames = games
+        let manager = FileManager.default
+
+        for directory in ["", "Games", "Covers"] {
+            let source = directory.isEmpty ? root : root.appending(path: directory)
+            let destination = directory.isEmpty ? cloud : cloud.appending(path: directory)
+            guard let names = try? manager.contentsOfDirectory(atPath: source.path) else { continue }
+
+            for name in names where !name.hasPrefix(".") {
+                let from = source.appending(path: name)
+                var isDirectory: ObjCBool = false
+                manager.fileExists(atPath: from.path, isDirectory: &isDirectory)
+                if isDirectory.boolValue { continue }
+
+                let to = destination.appending(path: name)
+                guard !manager.fileExists(atPath: to.path) else { continue }
+                try? manager.moveItem(at: from, to: to)
+            }
+        }
+
+        root = cloud
+        romsDirectory = cloud.appending(path: "Games", directoryHint: .isDirectory)
+        coversDirectory = cloud.appending(path: "Covers", directoryHint: .isDirectory)
+        isUsingCloud = true
+
+        load()
+        merge(localGames)
+        CloudStorage.prefetch(cloud)
+    }
+
+    /// Folds entries that only existed locally into whatever the container
+    /// already knew about, keeping whichever record was played more recently.
+    private func merge(_ incoming: [GameEntry]) {
+        var changed = false
+        for entry in incoming {
+            guard FileManager.default.fileExists(atPath: romURL(for: entry.id).path) else { continue }
+
+            if let index = games.firstIndex(where: { $0.id == entry.id }) {
+                let mine = games[index]
+                let newer = (entry.lastPlayedAt ?? .distantPast) > (mine.lastPlayedAt ?? .distantPast)
+                if newer {
+                    // Play time is the sum of two devices' sessions rather than
+                    // whichever number happens to be larger.
+                    var merged = entry
+                    merged.secondsPlayed = max(entry.secondsPlayed, mine.secondsPlayed)
+                    games[index] = merged
+                    changed = true
+                }
+            } else {
+                games.append(entry)
+                changed = true
+            }
+        }
+        if changed {
+            sortGames()
+            save()
+        }
+    }
+
+    // MARK: - Save files
+
+    private func saveURL(_ key: String, _ suffix: String) -> URL {
+        root.appending(path: "\(key).\(suffix)")
+    }
+
+    func batteryRAM(for key: String) -> Data? {
+        let url = saveURL(key, "sav")
+        CloudStorage.resolveConflicts(at: url)
+        return CloudStorage.read(url)
+    }
+
+    func write(batteryRAM: Data, for key: String) {
+        CloudStorage.write(batteryRAM, to: saveURL(key, "sav"))
+    }
+
+    func state(for key: String, slot: Int) -> Data? {
+        CloudStorage.read(saveURL(key, "state\(slot)"))
+    }
+
+    func write(state: Data, for key: String, slot: Int) {
+        CloudStorage.write(state, to: saveURL(key, "state\(slot)"))
+    }
+
+    /// Deliberately not `state(for:slot:) != nil`. That version read every byte
+    /// of the file to answer a question about its existence, from a menu
+    /// SwiftUI re-evaluated on every frame — and over iCloud it would also
+    /// trigger a download to do it.
+    func hasState(for key: String, slot: Int) -> Bool {
+        FileManager.default.fileExists(atPath: saveURL(key, "state\(slot)").path)
+    }
+
+    func autoState(for key: String) -> Data? {
+        CloudStorage.read(saveURL(key, "resume"))
+    }
+
+    func write(autoState: Data, for key: String) {
+        CloudStorage.write(autoState, to: saveURL(key, "resume"))
     }
 
     // MARK: - Importing
@@ -264,7 +375,8 @@ final class GameLibrary {
     private var catalogueURL: URL { root.appending(path: "Library.json") }
 
     private func load() {
-        guard let data = try? Data(contentsOf: catalogueURL),
+        CloudStorage.resolveConflicts(at: catalogueURL)
+        guard let data = CloudStorage.read(catalogueURL),
               let stored = try? JSONDecoder().decode([GameEntry].self, from: data)
         else { return }
 
@@ -276,7 +388,7 @@ final class GameLibrary {
 
     private func save() {
         guard let data = try? JSONEncoder().encode(games) else { return }
-        try? data.write(to: catalogueURL, options: .atomic)
+        CloudStorage.write(data, to: catalogueURL)
     }
 
     private func sortGames() {

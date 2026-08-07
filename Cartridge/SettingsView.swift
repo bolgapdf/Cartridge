@@ -22,6 +22,20 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
+                    LabeledContent("iCloud") {
+                        Text(library.isUsingCloud ? "Syncing"
+                             : CloudStorage.isSignedIn ? "Not set up" : "Signed out")
+                            .foregroundStyle(library.isUsingCloud ? .green : .secondary)
+                    }
+                } header: {
+                    Text("Library")
+                } footer: {
+                    Text(library.isUsingCloud
+                         ? "Games, saves and save states are shared with your other devices. A save changed in two places at once keeps both — the newer one stays live and the other is kept beside it."
+                         : "Everything is stored on this device only.")
+                }
+
+                Section {
                     Toggle("Resume Where You Left Off", isOn: $autoResume)
                         .onChange(of: autoResume) { _, enabled in
                             // Off has to mean off. A state kept from whenever

@@ -150,7 +150,7 @@ final class Emulator {
             }
 
             hasBattery = entry.hasBattery
-            if hasBattery, let saved = SaveStore.batteryRAM(for: entry.id) {
+            if hasBattery, let saved = library.batteryRAM(for: entry.id) {
                 queue.sync { core.batteryRAM = saved }
             }
 
@@ -158,7 +158,7 @@ final class Emulator {
             // a different build of the emulator may not decode; failing to
             // restore just means starting at the title screen, which is what
             // would have happened anyway.
-            if Self.autoResumeEnabled, let resume = SaveStore.autoState(for: entry.id) {
+            if Self.autoResumeEnabled, let resume = library.autoState(for: entry.id) {
                 queue.sync { try? core.loadState(resume) }
             }
 
@@ -210,7 +210,7 @@ final class Emulator {
         guard let entry, Self.autoResumeEnabled else { return }
         queue.sync {
             guard let data = try? core.saveState() else { return }
-            SaveStore.write(autoState: data, for: entry.id)
+            library.write(autoState: data, for: entry.id)
         }
     }
 
@@ -322,19 +322,19 @@ final class Emulator {
         guard let saveKey = entry?.id else { return }
         queue.async {
             guard let data = try? self.core.saveState() else { return }
-            SaveStore.write(state: data, for: saveKey, slot: slot)
+            Task { @MainActor in self.library.write(state: data, for: saveKey, slot: slot) }
         }
     }
 
     func loadState(slot: Int) {
         guard let saveKey = entry?.id,
-              let data = SaveStore.state(for: saveKey, slot: slot) else { return }
+              let data = library.state(for: saveKey, slot: slot) else { return }
         queue.async { try? self.core.loadState(data) }
     }
 
     func hasState(slot: Int) -> Bool {
         guard let saveKey = entry?.id else { return false }
-        return SaveStore.hasState(for: saveKey, slot: slot)
+        return library.hasState(for: saveKey, slot: slot)
     }
 
     /// Called when the app goes to the background, and on pause. Losing
@@ -346,7 +346,7 @@ final class Emulator {
         // there would be a save file that never lands.
         queue.sync {
             guard let ram = core.batteryRAM else { return }
-            SaveStore.write(batteryRAM: ram, for: saveKey)
+            library.write(batteryRAM: ram, for: saveKey)
         }
     }
 
@@ -358,57 +358,5 @@ final class Emulator {
     /// smoothing turns a deliberately chunky image into a blurry one.
     nonisolated private static func image(from pixels: [UInt32]) -> CGImage? {
         FrameImage.make(from: pixels)
-    }
-}
-
-/// Where saves live on disk.
-///
-/// Cartridge RAM uses the `.sav` name and layout every other emulator uses, so
-/// a save can be carried in or out without conversion.
-enum SaveStore {
-    private static let root: URL = {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appending(path: "Cartridge", directoryHint: .isDirectory)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        return base
-    }()
-
-    private static func url(_ name: String) -> URL {
-        // Titles come from filenames, which can contain anything.
-        let safe = name.replacingOccurrences(of: "/", with: "_")
-        return root.appending(path: safe)
-    }
-
-    static func batteryRAM(for key: String) -> Data? {
-        try? Data(contentsOf: url("\(key).sav"))
-    }
-
-    static func write(batteryRAM: Data, for key: String) {
-        try? batteryRAM.write(to: url("\(key).sav"), options: .atomic)
-    }
-
-    /// The state written automatically when play stops, kept apart from the
-    /// three the player controls so it can never overwrite one of theirs.
-    static func autoState(for key: String) -> Data? {
-        try? Data(contentsOf: url("\(key).resume"))
-    }
-
-    static func write(autoState: Data, for key: String) {
-        try? autoState.write(to: url("\(key).resume"), options: .atomic)
-    }
-
-    static func state(for key: String, slot: Int) -> Data? {
-        try? Data(contentsOf: url("\(key).state\(slot)"))
-    }
-
-    /// Deliberately not `state(for:slot:) != nil`. That version read every byte
-    /// of the file to answer a question about its existence, from a menu that
-    /// SwiftUI re-evaluated on every frame.
-    static func hasState(for key: String, slot: Int) -> Bool {
-        FileManager.default.fileExists(atPath: url("\(key).state\(slot)").path)
-    }
-
-    static func write(state: Data, for key: String, slot: Int) {
-        try? state.write(to: url("\(key).state\(slot)"), options: .atomic)
     }
 }
