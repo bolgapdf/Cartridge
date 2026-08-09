@@ -14,6 +14,7 @@ import UniformTypeIdentifiers
 /// which is letting you find a game without reading.
 struct LibraryView: View {
     let library: GameLibrary
+    let emulator: Emulator
     let play: (GameEntry) -> Void
 
     @State private var isImporting = false
@@ -50,7 +51,7 @@ struct LibraryView: View {
                 Button("Add Game", systemImage: "plus") { isImporting = true }
             }
         }
-        .sheet(isPresented: $isShowingSettings) { SettingsView(library: library) }
+        .sheet(isPresented: $isShowingSettings) { SettingsView(library: library, emulator: emulator) }
         .preferredColorScheme(theme.shell.scheme)
         .fileImporter(
             isPresented: $isImporting,

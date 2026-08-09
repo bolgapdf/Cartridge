@@ -12,10 +12,15 @@ import SwiftUI
 /// worse description of it than the colour.
 struct SettingsView: View {
     let library: GameLibrary
+    let emulator: Emulator
 
     @AppStorage("shellTheme") private var shellID = ShellTheme.gameBoy.id
     @AppStorage("buttonTheme") private var buttonID = ButtonTheme.classic.id
     @AppStorage("autoResume") private var autoResume = true
+    /// Deliberately not persisted across launches. An open debugging port
+    /// should be something you turned on today, not something you turned on
+    /// once in March.
+    @State private var scanServer = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -86,6 +91,19 @@ struct SettingsView: View {
                     Text(autoResume
                          ? "Leaving a game saves exactly where you are, and opening it again puts you back there. Your in-game saves are kept either way."
                          : "Leaving a game starts it from the title screen next time, like turning the console off. Only your in-game saves are kept.")
+                }
+
+                Section {
+                    Toggle("Cheat Search", isOn: $scanServer)
+                        .onChange(of: scanServer) { _, enabled in
+                            emulator.setScanServerEnabled(enabled)
+                        }
+                } header: {
+                    Text("Advanced")
+                } footer: {
+                    Text(scanServer
+                         ? "Cartridge is serving snapshots of the running game on 127.0.0.1:8484, for finding cheat addresses with a search tool. This machine only — nothing on your network can reach it."
+                         : "Lets a search tool on this machine read the running game's memory to find cheat addresses. Off unless you're using one.")
                 }
 
                 Section("Shelf") {

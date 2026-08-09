@@ -38,11 +38,19 @@ struct ContentView: View {
                 PlayerView(emulator: emulator) { playing = nil }
             } else {
                 NavigationStack {
-                    LibraryView(library: library, play: start)
+                    LibraryView(library: library, emulator: emulator, play: start)
                 }
             }
         }
-        .task { openLaunchArgumentROM() }
+        .task {
+            openLaunchArgumentROM()
+            // `-scanServer` opens the cheat-search port without going through
+            // Settings, which is how the Python side gets tested against the
+            // real server rather than a stand-in for it.
+            if ProcessInfo.processInfo.arguments.contains("-scanServer") {
+                emulator.setScanServerEnabled(true)
+            }
+        }
         .task {
             // Resolving the container can take a moment, so it happens after
             // first paint rather than on the way to it. Until it lands, the app

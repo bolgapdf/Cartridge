@@ -337,6 +337,42 @@ final class Emulator {
         return library.hasState(for: saveKey, slot: slot)
     }
 
+    // MARK: - Scan server
+
+    /// Serves snapshots to a cheat search over loopback. Nil until switched on.
+    private var scanServer: ScanServer?
+
+    private(set) var scanServerStatus: ScanServer.Status = .stopped
+
+    /// A snapshot for the search tool, taken on the emulation queue.
+    ///
+    /// `nonisolated` because the server calls it from its own queue and there
+    /// is nothing here the main actor owns: `core` and `queue` are the pair
+    /// that already isolate each other.
+    nonisolated private func snapshotForScanning() -> (title: String, data: Data)? {
+        queue.sync {
+            guard let data = try? core.saveState() else { return nil }
+            return (core.cartridgeTitle ?? "", data)
+        }
+    }
+
+    func setScanServerEnabled(_ enabled: Bool) {
+        guard enabled else {
+            scanServer?.stop()
+            scanServer = nil
+            scanServerStatus = .stopped
+            return
+        }
+        guard scanServer == nil else { return }
+
+        let server = ScanServer { [weak self] in self?.snapshotForScanning() }
+        server.onStatusChange = { [weak self] status in
+            Task { @MainActor in self?.scanServerStatus = status }
+        }
+        scanServer = server
+        server.start()
+    }
+
     /// Called when the app goes to the background, and on pause. Losing
     /// cartridge RAM is losing someone's save file, so it's worth being eager.
     func flushBatteryRAM() {

@@ -29,6 +29,9 @@ public final class GameBoy: EmulatedSystem, Bus {
     var apu = APU()
     private var cartridge: GameCartridge?
 
+    /// The name in the cartridge header, or nil with no cartridge inserted.
+    public var cartridgeTitle: String? { cartridge?.header.title }
+
     /// Eight 4 KB banks on the Color, of which a DMG only ever sees the first
     /// two. The low half is always bank 0; the high half is switchable.
     private var workRAM = [UInt8](repeating: 0, count: 0x8000)
