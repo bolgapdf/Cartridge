@@ -128,8 +128,47 @@ public final class GameBoy: EmulatedSystem, Bus {
 
     // MARK: - Running
 
+    /// Addresses held at fixed values, rewritten once per frame.
+    ///
+    /// Empty in the overwhelmingly common case, and the check below is one
+    /// `isEmpty` per frame, so this costs nothing when unused.
+    public var cheats: [Cheat] = []
+
+    /// Writes every enabled cheat, once.
+    ///
+    /// Once per frame rather than once per instruction because that's what the
+    /// hardware did, and games depend on the difference: a value the game
+    /// recomputes constantly will flicker rather than stick, and one that's
+    /// read shortly after a frame boundary — like the species of the encounter
+    /// about to start — takes reliably.
+    ///
+    /// This writes straight into work RAM rather than going through the bus.
+    /// The bus would route `$A000-$BFFF` through the mapper, and a cheat is
+    /// meant to poke memory, not to operate the cartridge's bank latches.
+    private func applyCheats() {
+        for cheat in cheats where cheat.isEnabled {
+            switch cheat.address {
+            case 0xC000...0xCFFF:
+                workRAM[Int(cheat.address & 0x0FFF)] = cheat.value
+            case 0xD000...0xDFFF:
+                // The bank the cheat names, not whichever one happens to be
+                // paged in when the frame ends.
+                let bank = max(1, min(cheat.bank, 7))
+                workRAM[bank * 0x1000 + Int(cheat.address & 0x0FFF)] = cheat.value
+            case 0xFF80...0xFFFE:
+                highRAM[Int(cheat.address - 0xFF80)] = cheat.value
+            case 0xA000...0xBFFF:
+                cartridge?.writeRAM(cheat.address, cheat.value)
+            default:
+                break  // ROM, VRAM, OAM and IO are not what these codes address.
+            }
+        }
+    }
+
     public func runFrame() {
         guard cartridge != nil else { return }
+
+        if !cheats.isEmpty { applyCheats() }
 
         carriedCycles += PPU.clocksPerFrame
         while carriedCycles > 0 {

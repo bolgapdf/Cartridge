@@ -365,7 +365,12 @@ final class Emulator {
         }
         guard scanServer == nil else { return }
 
-        let server = ScanServer { [weak self] in self?.snapshotForScanning() }
+        let server = ScanServer(
+            provider: { [weak self] in self?.snapshotForScanning() },
+            setCheats: { [weak self] cheats in
+                self?.queue.async { self?.core.cheats = cheats }
+            }
+        )
         server.onStatusChange = { [weak self] status in
             Task { @MainActor in self?.scanServerStatus = status }
         }

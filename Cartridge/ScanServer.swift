@@ -33,7 +33,11 @@ final class ScanServer {
     /// wherever the core actually lives.
     typealias SnapshotProvider = @Sendable () -> (title: String, data: Data)?
 
+    /// Replaces the set of held addresses. Empty clears them.
+    typealias CheatSetter = @Sendable ([Cheat]) -> Void
+
     private let provider: SnapshotProvider
+    private let setCheats: CheatSetter
     private let preferredPort: UInt16
     private let queue = DispatchQueue(label: "me.jacobsilva.Cartridge.scanserver")
     private var listener: NWListener?
@@ -44,10 +48,19 @@ final class ScanServer {
 
     var onStatusChange: (@Sendable (Status) -> Void)?
 
-    init(port: UInt16 = 8484, provider: @escaping SnapshotProvider) {
+    init(
+        port: UInt16 = 8484,
+        provider: @escaping SnapshotProvider,
+        setCheats: @escaping CheatSetter
+    ) {
         self.preferredPort = port
         self.provider = provider
+        self.setCheats = setCheats
     }
+
+    /// What the client last asked to be held, so CLEAR and re-FREEZE are the
+    /// only two things it has to think about.
+    private var held: [Cheat] = []
 
     // MARK: - Lifecycle
 
@@ -160,9 +173,34 @@ final class ScanServer {
     }
 
     private func handle(line: String, on connection: NWConnection) {
-        let command = line.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = trimmed.split(separator: " ").map(String.init)
+        let command = (words.first ?? "").uppercased()
 
         switch command {
+        case "FREEZE":
+            // FREEZE <hex address> <bank> <value>
+            guard words.count == 4,
+                  let address = UInt16(words[1].replacingOccurrences(of: "$", with: ""), radix: 16),
+                  let bank = Int(words[2]),
+                  let value = UInt8(words[3])
+            else {
+                send("ERR usage: FREEZE <hex address> <bank> <value>", on: connection)
+                return
+            }
+            held.removeAll { $0.address == address && $0.bank == bank }
+            held.append(Cheat(address: address, bank: bank, value: value))
+            setCheats(held)
+            send("OK \(held.count)", on: connection)
+
+        case "CLEAR":
+            held.removeAll()
+            setCheats([])
+            send("OK 0", on: connection)
+
+        case "HELD":
+            send("OK " + held.map { "\($0.code)@\($0.bank)" }.joined(separator: " "), on: connection)
+
         case "PING":
             send("PONG", on: connection)
 
