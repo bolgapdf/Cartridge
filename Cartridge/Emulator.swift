@@ -109,6 +109,10 @@ final class Emulator {
     /// inside a block dispatched there, including the ones that look
     /// synchronous. The compiler can't see a serial queue as an isolation
     /// domain, so the contract has to be stated rather than inferred.
+    /// Mirrors `isRunning` for readers that aren't on the main actor — the
+    /// scan server answers from its own queue and can't hop here to ask.
+    nonisolated(unsafe) private var clockIsRunning = false
+
     nonisolated(unsafe) private let core = GameBoy()
     nonisolated(unsafe) private let audio = AudioOutput()
     private let queue = DispatchQueue(label: "me.jacobsilva.Cartridge.emulation", qos: .userInteractive)
@@ -177,6 +181,7 @@ final class Emulator {
     func start() {
         guard entry != nil, !isRunning else { return }
         isRunning = true
+        clockIsRunning = true
         sessionStart = .now
         audio.start()
         restartClock()
@@ -185,6 +190,7 @@ final class Emulator {
     func pause() {
         guard isRunning else { return }
         isRunning = false
+        clockIsRunning = false
         clock?.cancel()
         clock = nil
         audio.stop()
@@ -369,7 +375,8 @@ final class Emulator {
             provider: { [weak self] in self?.snapshotForScanning() },
             setCheats: { [weak self] cheats in
                 self?.queue.async { self?.core.cheats = cheats }
-            }
+            },
+            isRunning: { [weak self] in self?.clockIsRunning ?? false }
         )
         server.onStatusChange = { [weak self] status in
             Task { @MainActor in self?.scanServerStatus = status }

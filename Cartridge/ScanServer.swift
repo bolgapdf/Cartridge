@@ -36,8 +36,14 @@ final class ScanServer {
     /// Replaces the set of held addresses. Empty clears them.
     typealias CheatSetter = @Sendable ([Cheat]) -> Void
 
+    /// Whether the frame clock is actually ticking. A search against a paused
+    /// console silently finds nothing, so the client is told rather than left
+    /// to infer it from results that look merely disappointing.
+    typealias RunningCheck = @Sendable () -> Bool
+
     private let provider: SnapshotProvider
     private let setCheats: CheatSetter
+    private let isRunning: RunningCheck
     private let preferredPort: UInt16
     private let queue = DispatchQueue(label: "me.jacobsilva.Cartridge.scanserver")
     private var listener: NWListener?
@@ -51,11 +57,13 @@ final class ScanServer {
     init(
         port: UInt16 = 8484,
         provider: @escaping SnapshotProvider,
-        setCheats: @escaping CheatSetter
+        setCheats: @escaping CheatSetter,
+        isRunning: @escaping RunningCheck
     ) {
         self.preferredPort = port
         self.provider = provider
         self.setCheats = setCheats
+        self.isRunning = isRunning
     }
 
     /// What the client last asked to be held, so CLEAR and re-FREEZE are the
@@ -200,6 +208,9 @@ final class ScanServer {
 
         case "HELD":
             send("OK " + held.map { "\($0.code)@\($0.bank)" }.joined(separator: " "), on: connection)
+
+        case "RUNNING":
+            send("OK \(isRunning() ? 1 : 0)", on: connection)
 
         case "PING":
             send("PONG", on: connection)
