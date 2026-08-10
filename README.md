@@ -1,10 +1,12 @@
 # Cartridge
 
-A Game Boy and Game Boy Color emulator written in Swift, for iPhone, iPad and Mac.
+A Game Boy and Game Boy Color emulator written in Swift, for iPhone, iPad
+and Mac.
 
-Cycle-accurate CPU, scanline PPU, four-channel sound, and a library that syncs.
-It passes every accuracy suite it's been pointed at, including a pixel-exact
-match against the reference renders of both `dmg-acid2` and `cgb-acid2`.
+Cycle-accurate CPU, scanline PPU, four-channel sound, and a library that
+syncs. It passes every accuracy suite it's been pointed at, including a
+pixel-exact match against the reference renders of both `dmg-acid2` and
+`cgb-acid2`.
 
 ![dmg-acid2, cgb-acid2, and the published cgb-acid2 reference](docs/accuracy.png)
 
@@ -13,13 +15,21 @@ published reference. The colours differ because this applies the colour
 correction a real Game Boy Color screen implied and the reference doesn't;
 structurally, **0 of 23,040 pixels differ**.*
 
----
+## Contents
+
+- [Accuracy](#accuracy)
+- [What it does](#what-it-does)
+- [Cheat search](#cheat-search)
+- [How it's built](#how-its-built)
+- [Engineering notes](#engineering-notes)
+- [Running it](#running-it)
+- [What's missing](#whats-missing)
 
 ## Accuracy
 
-Emulators are easy to write and hard to write *correctly*. "It boots a game I
-own" is the weakest possible standard, so this is measured against the suites
-the community built to make correctness an objective question.
+Emulators are easy to write and hard to write *correctly*. "It boots a game
+I own" is the weakest possible standard, so this is measured against the
+suites the community built to make correctness an objective question.
 
 | Suite | What it checks | Result |
 | --- | --- | --- |
@@ -32,31 +42,63 @@ the community built to make correctness an objective question.
 | `cgb-acid2` | Colour banking, attributes, palettes, priority | **Pixel-exact** |
 | Blargg `dmg_sound` | Sound hardware minutiae | 3 / 12 |
 
-The whole suite runs in about seventeen seconds. `dmg_sound` is the honest gap —
-what's left in it is wave RAM access during playback and length counters across
-power transitions, none of which affects ordinary play, but it isn't finished.
+The whole suite runs in about seventeen seconds. `dmg_sound` is the honest
+gap — what's left in it is wave RAM access during playback and length
+counters across power transitions, none of which affects ordinary play, but
+it isn't finished.
 
 The test ROMs aren't committed. `scripts/fetch-roms.sh` and
-`scripts/fetch-tests.sh` download them, so the repository holds no binaries.
+`scripts/fetch-tests.sh` download them, so the repository holds no
+binaries.
 
 ## What it does
 
-- **Game Boy and Game Boy Color.** Two VRAM banks, per-tile attributes, eight
-  background and eight object palettes, banked work RAM, H-blank VRAM transfer,
-  double-speed mode.
-- **Sound.** Two square channels, the wave channel, and the noise channel, mixed
-  through the hardware's own panning and volume, output through a lock-free ring
-  buffer to `AVAudioEngine`.
-- **Mappers.** MBC1, 2, 3 and 5 plus unmapped cartridges — effectively the whole
-  library. MBC3's real-time clock keeps running while the app is closed, because
-  it's an offset from wall time rather than a counter.
-- **Saves.** Battery saves in the standard `.sav` format, three save-state slots,
-  and an automatic state so leaving a game costs nothing.
-- **A library**, with artwork you choose or the last frame of your last session.
+- **Game Boy and Game Boy Color.** Two VRAM banks, per-tile attributes,
+  eight background and eight object palettes, banked work RAM, H-blank
+  VRAM transfer, double-speed mode.
+- **Sound.** Two square channels, the wave channel, and the noise channel,
+  mixed through the hardware's own panning and volume, output through a
+  lock-free ring buffer to `AVAudioEngine`.
+- **Mappers.** MBC1, 2, 3 and 5 plus unmapped cartridges — effectively the
+  whole library. MBC3's real-time clock keeps running while the app is
+  closed, because it's an offset from wall time rather than a counter.
+- **Saves.** Battery saves in the standard `.sav` format, three save-state
+  slots, and an automatic state so leaving a game costs nothing.
+- **A live cheat search port**, for finding and holding memory addresses
+  in a running game. See [Cheat search](#cheat-search).
+- **A library**, with artwork you choose or the last frame of your last
+  session.
 - **Themes.** Five shells and five button sets, chosen independently.
 - **iCloud**, so games and saves follow you between devices.
-- Touch controls with a thumbstick, hardware keyboard, on-screen clip capture to
-  GIF, LCD ghosting, and monochrome palettes.
+- Touch controls with a thumbstick, hardware keyboard, on-screen clip
+  capture to GIF, LCD ghosting, and monochrome palettes.
+
+## Cheat search
+
+Switching on **Settings › Advanced › Cheat Search** opens a TCP listener on
+`127.0.0.1:8484` — loopback only, off by default, and never reachable from
+another machine. It exists because finding the address behind a number
+means comparing memory a few seconds apart, and doing that through save
+files means stopping to save one between every round of a search.
+
+The protocol is a small line-based one, built around the same
+`saveState()` serialisation the save-state system already uses:
+
+| Command | Does |
+| --- | --- |
+| `SNAP` | returns a full snapshot of work RAM, high RAM and cartridge RAM |
+| `RUNNING` | whether the frame clock is actually ticking |
+| `FREEZE addr bank value` | rewrites that address once per frame, live, while the game keeps running |
+| `CLEAR` | releases every held address |
+
+Cartridge doesn't include a search UI of its own — `SNAP` gives out
+snapshots and `FREEZE` accepts addresses, and finding *which* address
+answers to a number is a different problem with its own tool.
+[**Dowser**](https://github.com/bolgapdf/Dowser) is that tool: point
+`dowser live` at a running game and it narrows the whole scannable address
+space down to one candidate in a handful of rounds, then either prints the
+eight-digit code or calls `freeze` to hold it through this same socket —
+the value changes in the emulator while the search session is still open.
 
 ## How it's built
 
@@ -67,59 +109,66 @@ Cartridge/       SwiftUI for iOS and macOS
 GameBoyKitTests/ The accuracy suites
 ```
 
-`EmulatedSystem` exists so that rendering, input, audio, save states and file
-handling get written once. A second core is a second conformance rather than a
-second application.
+`EmulatedSystem` exists so that rendering, input, audio, save states and
+file handling get written once. A second core is a second conformance
+rather than a second application.
 
 Two decisions did most of the work:
 
-**The CPU knows nothing but a bus.** It can't see cartridges, video memory or
-hardware registers — only `read` and `write`. That's what lets the entire
-instruction set be verified against a flat 64 KB array with no console attached.
+**The CPU knows nothing but a bus.** It can't see cartridges, video memory
+or hardware registers — only `read` and `write`. That's what lets the
+entire instruction set be verified against a flat 64 KB array with no
+console attached.
 
-**The opcode map is decoded structurally, not as 500 cases.** An opcode splits
-into `xxyyyzzz`, where `x` picks a block and `y`/`z` select registers,
-conditions or operations. Every `LD r,r'`, every ALU operation, and the whole
-`CB` page fall out of that as a few lines each.
+**The opcode map is decoded structurally, not as 500 cases.** An opcode
+splits into `xxyyyzzz`, where `x` picks a block and `y`/`z` select
+registers, conditions or operations. Every `LD r,r'`, every ALU operation,
+and the whole `CB` page fall out of that as a few lines each.
 
 ## Engineering notes
 
-The bugs worth writing down, because each one changed how the thing was built.
+The bugs worth writing down, because each one changed how the thing was
+built.
 
-**`mem_timing` failed, and the fix was architectural.** The bus advanced the
-timer and PPU *after* each instruction. That gets every cycle count right and
-still fails, because the test asks when *inside* an instruction each read lands.
-Now every bus access ticks the machine as it happens. It costs ~40% throughput
-and buys a class of correctness unreachable otherwise.
+**`mem_timing` failed, and the fix was architectural.** The bus advanced
+the timer and PPU *after* each instruction. That gets every cycle count
+right and still fails, because the test asks when *inside* an instruction
+each read lands. Now every bus access ticks the machine as it happens. It
+costs ~40% throughput and buys a class of correctness unreachable
+otherwise.
 
-**A sampled test suite reported the same green as a complete one.** A wrong `DAA`
-shipped past 500 passing opcodes. Measured afterwards: the bug failed 1% of
-`DAA`'s reference cases, and the suite was sampling 25 of 1,000 — so it missed it
-**78% of the time**. Blargg caught it instead. The full suite runs in eight
-seconds, which is a poor reason to gamble.
+**A sampled test suite reported the same green as a complete one.** A
+wrong `DAA` shipped past 500 passing opcodes. Measured afterwards: the bug
+failed 1% of `DAA`'s reference cases, and the suite was sampling 25 of
+1,000 — so it missed it **78% of the time**. Blargg caught it instead. The
+full suite runs in eight seconds, which is a poor reason to gamble.
 
-**Save states were 847 KB and took 236 ms**, which is unusable for anything that
-writes them continuously. The cause was the audio channel's pending sample buffer
-being serialised. Excluding it and the framebuffers, and switching from JSON to a
-compressed binary property list, took them to **6 KB and 1.7 ms**. A test asserts
-they stay under 64 KB, because for this that number is a feature.
+**Save states were 847 KB and took 236 ms**, which is unusable for
+anything that writes them continuously — including the cheat-search
+`SNAP` command above. The cause was the audio channel's pending sample
+buffer being serialised. Excluding it and the framebuffers, and switching
+from JSON to a compressed binary property list, took them to **6 KB and
+1.7 ms**. A test asserts they stay under 64 KB, because for this that
+number is a feature.
 
-**A profile said the renderer got cheaper. It had stopped drawing.** Presentation
-went from 137% of a core to 30% across three changes — a layer-backed view instead
-of `Image`, sRGB instead of DeviceRGB, and whole-module optimisation for Debug
-(`-O` alone doesn't inline across CPU → bus → PPU, which is every hot call there
-is). But one intermediate state had a lower CPU number *because the picture was
-missing*. A performance number is not a correctness check.
+**A profile said the renderer got cheaper. It had stopped drawing.**
+Presentation went from 137% of a core to 30% across three changes — a
+layer-backed view instead of `Image`, sRGB instead of DeviceRGB, and
+whole-module optimisation for Debug (`-O` alone doesn't inline across CPU
+→ bus → PPU, which is every hot call there is). But one intermediate state
+had a lower CPU number *because the picture was missing*. A performance
+number is not a correctness check.
 
-**An iOS app with no launch screen runs letterboxed.** Content sat centred in a
-band of black, and it presents exactly as a SwiftUI layout bug — three layout
-fixes changed nothing. The cause was `settings_iOS:`, which is not an XcodeGen
-key and had been silently ignored since the first build. Measuring the container
-found a bare `Color.blue` filling 522 of 874 points, which no view could explain.
+**An iOS app with no launch screen runs letterboxed.** Content sat centred
+in a band of black, and it presents exactly as a SwiftUI layout bug —
+three layout fixes changed nothing. The cause was `settings_iOS:`, which
+is not an XcodeGen key and had been silently ignored since the first
+build. Measuring the container found a bare `Color.blue` filling 522 of
+874 points, which no view could explain.
 
-**A target that compiles is not a target that works.** Every round built the Mac
-app and ran its tests. Neither noticed that moving the player out of the
-navigation stack had removed the only way to leave a game.
+**A target that compiles is not a target that works.** Every round built
+the Mac app and ran its tests. Neither noticed that moving the player out
+of the navigation stack had removed the only way to leave a game.
 
 ## Running it
 
@@ -132,25 +181,27 @@ xcodegen generate
 xcodebuild test -scheme Cartridge_macOS -destination 'platform=macOS'
 ```
 
-Open the project and run `Cartridge_iOS` or `Cartridge_macOS`. Add a ROM through
-the library — the app copies it in, so the original can move or be deleted.
+Open the project and run `Cartridge_iOS` or `Cartridge_macOS`. Add a ROM
+through the library — the app copies it in, so the original can move or be
+deleted.
 
 No ROMs are included, and none ever will be.
 
-### iCloud
+#### iCloud
 
-The code is complete but the capability isn't enabled, because registering a
-container is a developer-portal change. To turn it on: add the **iCloud**
-capability with **iCloud Documents** and the container
+The code is complete but the capability isn't enabled, because registering
+a container is a developer-portal change. To turn it on: add the
+**iCloud** capability with **iCloud Documents** and the container
 `iCloud.me.jacobsilva.Cartridge` to both app targets, then uncomment
-`CODE_SIGN_ENTITLEMENTS` in `project.yml`. Without it the app runs on local
-storage and switches over as soon as the capability exists.
+`CODE_SIGN_ENTITLEMENTS` in `project.yml`. Without it the app runs on
+local storage and switches over as soon as the capability exists.
 
 ## What's missing
 
 - The rest of `dmg_sound`.
 - Game controller support.
 - An Apple TV target, which the library was restructured to make possible.
-- Game Boy Advance, which would be a second core rather than an extension —
-  real hardware ran Game Boy games on a separate CPU, so supporting both
+- Game Boy Advance, which would be a second core rather than an extension
+  — real hardware ran Game Boy games on a separate CPU, so supporting both
   libraries genuinely means two.
+</content>
