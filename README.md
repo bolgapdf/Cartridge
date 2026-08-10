@@ -1,7 +1,7 @@
 # Cartridge
 
 A Game Boy and Game Boy Color emulator for iPhone, iPad, and Mac, written
-from the processor up in Swift. No existing emulator code — the CPU,
+from the processor up in Swift. No existing emulator code: the CPU,
 graphics chip, and sound hardware are each simulated independently.
 
 ## What it does
